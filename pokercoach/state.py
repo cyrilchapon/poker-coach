@@ -267,6 +267,42 @@ def position_labels(state: HandState) -> dict[int, str]:
     }
 
 
+def preflop_acting_order_offsets(n: int) -> list[int]:
+    """Ordre de parole préflop, en écarts au bouton (0=BTN). UTG (ou
+    équivalent) parle en premier, la BB en dernier — cf.
+    docs/brief/references/03-multiway-generalization.md."""
+    if n == 2:
+        return [0, 1]  # BTN/SB agit en premier en HU, puis BB
+    return list(range(3, n)) + [0, 1, 2]
+
+
+def postflop_acting_order_offsets(n: int) -> list[int]:
+    """Ordre de parole postflop, en écarts au bouton (0=BTN). La SB parle en
+    premier (ou la BB en heads-up, où offset 1 = BB), le bouton toujours en
+    dernier — le bouton est la seule position en position contre tout le
+    monde, quel que soit le format."""
+    return list(range(1, n)) + [0]
+
+
+def n_behind(state: HandState, seat: int) -> int:
+    """Nombre de joueurs qui doivent encore parler derrière ``seat`` au
+    premier tour de parole préflop (mesure STRUCTURELLE, indépendante des
+    folds déjà survenus — c'est la clé d'indexation des ranges, pas un
+    décompte en direct)."""
+    n = state.n_seats
+    offset = (seat - state.button_seat) % n
+    order = preflop_acting_order_offsets(n)
+    return len(order) - 1 - order.index(offset)
+
+
+def ip_postflop(state: HandState, seat: int) -> bool:
+    """Le héros sera-t-il en position après le flop contre le caller le plus
+    probable ? Simplifié en : ``seat`` est-il le bouton ? (le bouton est
+    toujours le dernier à parler postflop, quel que soit le format —
+    cf. 03-multiway-generalization.md, tableau de référence)."""
+    return seat == state.button_seat
+
+
 def street_contribution(state: HandState, street: str, seat: int) -> float:
     """Montant total investi par ``seat`` sur ``street`` (0 s'il n'a pas agi)."""
     node = state.streets.get(street)
@@ -324,10 +360,39 @@ def players_active(state: HandState) -> int:
     return sum(1 for s in state.seats if s.status in ("active", "allin"))
 
 
+def n_defenders(state: HandState) -> int:
+    """Nombre de sièges encore ACTIFS (peuvent encore agir) qui font face à la
+    mise la plus haute de la rue courante sans l'avoir encore égalée —
+    ``to_act`` inclus. 1 en heads-up standard ; peut monter en multiway,
+    c'est le dénominateur du MDF individuel (voir ``derive``)."""
+    max_committed = max(
+        (street_contribution(state, state.street, s.seat) for s in state.seats
+         if s.status in ("active", "allin")),
+        default=0.0,
+    )
+    return sum(
+        1 for s in state.seats
+        if s.status == "active" and street_contribution(state, state.street, s.seat) < max_committed
+    )
+
+
 def effective_stack(state: HandState, *, seat: int | None = None) -> float:
     """Stack effectif : le plus petit stack restant parmi les sièges encore en
-    lice pour le pot (celui qui plafonne ce qui peut être gagné/perdu)."""
-    return min(remaining_stack(state, s.seat) for s in state.seats if s.status in ("active", "allin"))
+    lice pour le pot (celui qui plafonne ce qui peut être gagné/perdu).
+
+    Avec ``seat`` : le stack effectif DE CE SIÈGE précisément, c-à-d le
+    plafond entre son propre stack et le plus petit stack adverse encore en
+    lice (ce que ce siège peut réellement gagner/perdre face à la table).
+    Sans ``seat`` (défaut) : le plus petit stack parmi tous les sièges en
+    lice, toute la table.
+    """
+    in_hand = [s.seat for s in state.seats if s.status in ("active", "allin")]
+    if seat is None:
+        return min(remaining_stack(state, s) for s in in_hand)
+    others = [s for s in in_hand if s != seat]
+    if not others:
+        return remaining_stack(state, seat)
+    return min(remaining_stack(state, seat), min(remaining_stack(state, s) for s in others))
 
 
 @dataclass
@@ -341,10 +406,12 @@ class DerivedState:
     pot: float
     to_call: float
     pot_odds: float | None
-    mdf: float | None
+    mdf_collective: float | None
+    mdf_individual: float | None
     spr: float | None
     effective_stack: float
     players_active: int
+    n_defenders: int
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -357,10 +424,12 @@ class DerivedState:
             "pot": round(self.pot, 4),
             "to_call": round(self.to_call, 4),
             "pot_odds": None if self.pot_odds is None else round(self.pot_odds, 4),
-            "mdf": None if self.mdf is None else round(self.mdf, 4),
+            "mdf_collective": None if self.mdf_collective is None else round(self.mdf_collective, 4),
+            "mdf_individual": None if self.mdf_individual is None else round(self.mdf_individual, 4),
             "spr": None if self.spr is None else round(self.spr, 4),
             "effective_stack": round(self.effective_stack, 4),
             "players_active": self.players_active,
+            "n_defenders": self.n_defenders,
         }
 
 
@@ -368,17 +437,45 @@ def derive(state: HandState) -> DerivedState:
     """Calcule le paquet de dérivations de base : pot, cotes, MDF, SPR, qui parle.
 
     ``pot_odds`` = to_call / (pot + to_call) — équité requise pour un call rentable.
-    ``mdf`` (individuel/heads-up) = pot / (pot + to_call) = 1 - pot_odds. La
-    distinction collective/individuelle en multiway est traitée par
-    ``budget.py`` (data/multiway-adjustment.yaml), pas ici.
+
+    MDF — piège théorique documenté dans data/multiway-adjustment.yaml : en
+    heads-up un seul joueur porte l'obligation de défense, en multiway elle
+    est COLLECTIVE (c'est la fréquence de fold *combinée* qui doit rester
+    sous le seuil, donc chaque défenseur individuel peut folder davantage).
+    Appliquer le MDF heads-up tel quel en multiway conduit à SUR-défendre —
+    exactement un des modes de perte documentés de l'utilisateur.
+
+    ``mdf_collective`` = pot / (pot + to_call) — la formule heads-up
+    classique, ici interprétée comme l'obligation COMBINÉE de tous les
+    défenseurs encore à agir sur cette mise.
+    ``mdf_individual`` = 1 - (1 - mdf_collective) ** (1 / n_defenders) —
+    approximation (non un résultat exact, cf. le YAML) dérivée de :
+    la mise n'est auto-rentable pour l'agresseur QUE SI tous les défenseurs
+    foldent ; avec ``n_defenders`` défenseurs indépendants foldant chacun à
+    fréquence ``f``, cet événement a probabilité ``f ** n_defenders`` — on
+    résout pour ``f`` en l'égalant à ``1 - mdf_collective``, puis
+    ``mdf_individual = 1 - f``. En heads-up (``n_defenders == 1``), les deux
+    valeurs coïncident.
     ``spr`` = effective_stack / pot.
     """
     labels = position_labels(state)
     p = pot(state)
     call = to_call(state)
     denom = p + call
-    pot_odds = call / denom if denom > 0 else None
-    mdf = p / denom if denom > 0 else None
+    # Les deux ne sont définis QUE s'il y a une vraie mise à suivre (call > 0)
+    # — pas seulement un pot non nul. Bug corrigé : avec l'ancienne garde
+    # (denom > 0), to_call == 0 donnait pot_odds = 0.0 et mdf = 1.0 au lieu
+    # de None dès que le pot était non nul (systématique dès la 2e rue) —
+    # des valeurs numériques trompeuses pour "il n'y a rien à comparer", qui
+    # ont fait passer une décision check/bet par la logique de bornes
+    # d'équité de G3 (pc brief) comme si un seuil de rentabilité existait.
+    pot_odds = call / denom if call > 0 else None
+    mdf_collective = p / denom if call > 0 else None
+    n_def = n_defenders(state)
+    mdf_individual = (
+        1 - (1 - mdf_collective) ** (1 / n_def)
+        if mdf_collective is not None and n_def > 0 else mdf_collective
+    )
     eff = effective_stack(state)
     spr = eff / p if p > 0 else None
 
@@ -392,8 +489,10 @@ def derive(state: HandState) -> DerivedState:
         pot=p,
         to_call=call,
         pot_odds=pot_odds,
-        mdf=mdf,
+        mdf_collective=mdf_collective,
+        mdf_individual=mdf_individual,
         spr=spr,
         effective_stack=eff,
         players_active=players_active(state),
+        n_defenders=n_def,
     )

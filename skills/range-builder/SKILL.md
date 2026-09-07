@@ -1,45 +1,44 @@
 ---
 name: range-builder
-description: Construit avec l'utilisateur une range concrète (open-raise, 3bet, 4bet, call/défense) pour une situation donnée — position, profondeur de stack, contexte adverse. S'appuie sur poker-rules, range-notation, gto-glossary, equity-engine, et un tableau de ranges de référence approximatives. À utiliser dès que l'utilisateur veut définir, ajuster ou comprendre sa range dans une situation précise, ou dit ne pas savoir "où se situerait sa range" dans une main.
+description: Construit avec l'utilisateur une range concrète (open-raise, 3bet, 4bet, call/défense) pour une situation donnée — position, profondeur de stack, contexte adverse. S'appuie sur le lookup paramétré du moteur (HU → 8-max, indexé par n_behind/ip_postflop, pas par label de position) et sur equity-engine. À utiliser dès que l'utilisateur veut définir, ajuster ou comprendre sa range dans une situation précise.
 ---
 
 # Range Builder
 
+## v2 : lookup paramétré, plus une table par position/format
+
+Le point de départ n'est plus `references/baseline-ranges.md` seul : `pc brief --hand hand.json` en préflop renvoie un champ `range` avec le pourcentage/la notation de référence pour la situation exacte (scénario, `n_behind`, `ip_postflop`, profondeur), et un `confidence` (`high` / `medium` / `extrapolated`). **Toujours dire la confidence à l'utilisateur** — HU et 6-max sont `high`, 7/8-max s'appuie sur une extrapolation explicite (`extrapolated`), pas des charts vérifiés. Voir `docs/brief/references/03-multiway-generalization.md` pour le raisonnement complet ; `references/baseline-ranges.md` (v1) reste la référence de notation 6-max d'origine si un recoupement est utile.
+
+Scénarios dérivés (pas des tables séparées, des transformations depuis la RFI — `pokercoach/ranges/table.py`) : `vs_rfi`, `vs_limp` (élargi, traité en scénario exploitant de première classe, pas dégénéré), `squeeze`, `vs_3bet`, `vs_4bet`. Toujours `confidence: extrapolated` — ce sont des formules d'approximation documentées, pas des sorties de solveur.
+
 ## Dépendances
 
 - `range-notation` : format de sortie obligatoire pour toute range produite.
-- `gto-glossary` : vocabulaire (linéaire/polarisée/condensée, blockers, 3bet, squeeze...) à utiliser systématiquement en expliquant les choix.
-- `equity-engine` (`scripts/equity.py`) : pour vérifier l'équité moyenne de la range construite contre une range adverse de référence, à titre de sanity check.
-- `decision-factors` : facteurs qualitatifs (position, implied odds, SPR, fold equity, joueurs restants) à croiser avec l'équité pour toute analyse un peu poussée — pas juste sortir un chiffre d'équité brut.
-- `references/baseline-ranges.md` : point de départ heuristique par position/action — **approximatif, pas une vérité solver**, à annoncer comme tel à l'utilisateur.
-- `scripts/range_stats.py` : calcule le % de mains / nombre de combos d'une range en notation standard.
-- `scripts/hand_rank.py` : classe une liste de mains candidates par équité contre une range adverse donnée — sert à répondre à "où se situe cette main dans ma range de call, et quelles sont les 2 mains limitrophes ?". **Ce n'est pas un solver** : classement par équité brute seule (ignore playability, blockers fins, jeu postflop réel), à présenter comme un repère de calibration, jamais comme un verdict définitif.
+- `pc glossary` : vocabulaire (linéaire/polarisée/condensée, blockers, 3bet, squeeze...).
+- `pc equity` : pour vérifier l'équité moyenne de la range construite contre une range adverse de référence, à titre de sanity check.
+- `decision-factors` : facteurs qualitatifs à croiser, en G5 seulement (`pc brief` charge cette skill lui-même le cas échéant).
+- `references/baseline-ranges.md` : ranges 6-max v1, gardées pour la convention de notation d'origine.
+- `scripts/range_stats.py`, `scripts/hand_rank.py` (v1, conservés) : % de mains/combos d'une range, et classement de mains candidates par équité contre une range adverse — utiles pour situer une main proche d'une frontière (voir ci-dessous). Ce ne sont pas des solveurs : classement par équité brute seule.
 
 ## Situer une main dans une range de call (cas d'usage fréquent)
 
-Quand l'utilisateur demande "est-ce que X est un bon fold/call, et où ça se situe ?" :
-1. Calculer l'équité requise pour un call rentable (cotes du pot) — voir `gto-glossary` → pot odds.
-2. Faire tourner `hand_rank.py` sur un petit groupe de mains voisines de X (même As, kickers différents, versions suited/offsuit) contre la range adverse pertinente.
-3. Identifier la main juste au-dessus du seuil (call marginal) et celle juste en dessous (fold marginal) parmi ce groupe — les montrer à l'utilisateur pour qu'il visualise l'écart réel entre sa main et la frontière, pas juste un verdict binaire.
-4. Toujours rappeler que ce classement est fondé sur l'équité seule : la vraie frontière d'une range de call tient aussi compte de la position, des blockers, et de la jouabilité postflop — l'équité donne un ordre de grandeur fiable, pas une frontière exacte.
-
+1. `pc state`/`pc brief` donnent l'équité requise (`pot_odds`) pour un call rentable.
+2. `scripts/hand_rank.py` sur un petit groupe de mains voisines de X contre la range adverse narrowée (`pc narrow`) pertinente.
+3. Identifier la main juste au-dessus/en dessous du seuil parmi ce groupe — montrer l'écart réel, pas un verdict binaire.
+4. Rappeler que ce classement se fonde sur l'équité seule : la vraie frontière tient aussi compte de la position, des blockers, de la jouabilité postflop.
 
 ## Démarche
 
-1. **Cadrer la situation** : position du héros, profondeur de stack (100bb par défaut sauf précision), type d'action (open, 3bet, 4bet, call, squeeze), et contre qui/quoi (position adverse, profil si connu via la notation HUD).
-2. **Proposer un point de départ** depuis `references/baseline-ranges.md`, en étant clair que c'est une approximation à ajuster, pas une réponse figée.
-3. **Construire avec l'utilisateur, pas à sa place** : proposer, mais laisser l'utilisateur trancher les mains limites ("on inclut KTo ou pas ?") plutôt que de lui livrer une range terminée sans échange — l'objectif est qu'il apprenne à raisonner la construction, pas qu'il reçoive un tableau.
-4. **Ajuster selon le contexte réel** :
-   - Range **linéaire** pour un open-raise (meilleures mains dans l'ordre, pas de bluffs purs).
-   - Range **polarisée** pour un 3bet/squeeze (value + bluffs à blockers/playability, pas de mains moyennes "molles").
-   - Élargir face à un adversaire loose/passif (Fish, Maniac), resserrer face à un TAG solide (peu d'exploit possible, cf. le raisonnement déjà tenu par l'utilisateur en session).
-   - Resserrer si des joueurs solides restent à parler derrière (risque de squeeze).
-5. **Sortir le résultat en notation standard** (`range-notation`) et donner ses stats (`range_stats.py` : % de mains, nombre de combos).
-6. **Sanity check optionnel** : calculer l'équité moyenne de la range construite contre une range adverse typique via `equity-engine`, pour donner un ordre de grandeur (pas une preuve d'optimalité GTO).
+1. **Cadrer la situation** : position (dérivée en `n_behind`/`ip_postflop`), profondeur de stack (100bb par défaut), type d'action, contexte adverse.
+2. **Proposer le point de départ** de `pc brief`, avec sa `confidence` explicite.
+3. **Construire avec l'utilisateur, pas à sa place** : proposer, laisser trancher les mains limites.
+4. **Ajuster** : linéaire pour un open-raise, polarisée pour un 3bet/squeeze ; élargir face à Fish/Maniac, resserrer face à un TAG solide ou si des joueurs solides restent à parler derrière (`n_behind` élevé).
+5. **Sortir en notation standard** (`range-notation`) avec ses stats (`range_stats.py`).
+6. **Sanity check optionnel** : `pc equity` de la range construite contre une range adverse typique.
 
 ## Ce que cette skill NE fait PAS
 
-Ne invente pas une "réponse solver exacte" — les valeurs de référence sont explicitement approximatives. Si l'utilisateur veut une précision de niveau solver, le renvoyer vers `solver-reader` une fois qu'un export réel est disponible, ou vers un solveur externe (cf. les ressources identifiées en amont du projet : Desktop/WASM Postflop, TexasSolver).
+N'invente pas une "réponse solver exacte" — les valeurs de référence sont explicitement approximatives, marquées `confidence`. Pour une précision de niveau solveur → `solver-reader` avec un export réel.
 
 ## Ce que cette skill NE couvre PAS
 

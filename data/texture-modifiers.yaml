@@ -88,7 +88,7 @@ special_board_overrides:
   double_paired_board:
     nuts: "full de la paire supérieure"
     lower_full:    { att: 2.5, def: 3.5 }
-    flush_straight:{ att: 2.0, def: 3.0 }
+    flush_straight: { att: 2.0, def: 3.0 }
     kicker_only:   "paliers dégradés en 3BP/4BP"
   trips_plus_side_cards:
     note: "quads = nuts ; carte assortie ou paire servie forme des paliers de full ; couleur/quinte dégradées sous le full"
