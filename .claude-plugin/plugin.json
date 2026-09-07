@@ -1,0 +1,19 @@
+{
+  "name": "poker-coach",
+  "version": "2.0.0-dev",
+  "description": "Personal No-Limit Texas Hold'em coach for one player: hand review, session simulation, and coaching for cash game online (heads-up to 8-max). Never plays or advises during a live hand.",
+  "author": {
+    "name": "Cyril Chapon",
+    "email": "chpn.cyril@gmail.com"
+  },
+  "repository": "https://github.com/cyrilchapon/poker-coach",
+  "license": "MIT",
+  "keywords": [
+    "poker",
+    "no-limit-holdem",
+    "coaching",
+    "gto",
+    "equity",
+    "range"
+  ]
+}

@@ -1,0 +1,41 @@
+# Table de pression pondérée : taille de mise en % du pot -> poids consommé
+#
+# Source : PokerSkill, arXiv 2605.30094, annexe E ("bet-size to weighted-pressure").
+# L'implémentation d'origine utilise une table de 46 seuils interpolée linéairement ;
+# les seuils représentatifs publiés sont reproduits ci-dessous.
+#
+# Principe monotone :
+#   fraction de mise plus grande  ->  poids de pression plus grand
+#                                 ->  moins de budget ATT/DEF restant
+#
+# Lecture : si (bet / pot au moment de la mise) * 100 < threshold_pct, renvoyer weight.
+# Interpoler linéairement entre deux seuils pour un résultat continu.
+
+meta:
+  source: "arXiv 2605.30094 annexe E"
+  interpolation: linear
+
+table:
+  - { threshold_pct: 5,    weight: 0.04 }
+  - { threshold_pct: 20,   weight: 0.30 }
+  - { threshold_pct: 32,   weight: 0.50 }
+  - { threshold_pct: 50,   weight: 0.70 }
+  - { threshold_pct: 67,   weight: 0.85 }
+  - { threshold_pct: 85,   weight: 1.00 }
+  - { threshold_pct: 100,  weight: 1.10 }
+  - { threshold_pct: 122,  weight: 1.25 }
+  - { threshold_pct: 150,  weight: 1.40 }
+  - { threshold_pct: 195,  weight: 1.60 }
+  - { threshold_pct: 300,  weight: 2.00 }
+  - { threshold_pct: 400,  weight: 2.30 }
+  - { threshold_pct: 500,  weight: 2.50 }
+  - { threshold_pct: 700,  weight: 2.90 }
+  - { threshold_pct: 1000, weight: 3.40 }
+  - { threshold_pct: 1500, weight: 4.00 }
+cap: { above_pct: 1500, weight: 4.00 }
+
+# Conséquence utile pour le coaching : une ligne 33% flop + 66% turn + 100% river
+# consomme environ 0.50 + 0.85 + 1.10 = 2.45 de budget. Une main à ATT 2.1
+# (top paire kicker faible en SRP) ne peut donc PAS soutenir cette ligne :
+# le budget est épuisé avant la river. C'est le mécanisme qui bloque le
+# troisième barrel.

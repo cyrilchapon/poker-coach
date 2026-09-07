@@ -1,0 +1,127 @@
+# Ajustements multiway et exploitants
+#
+# ⚠️ CE FICHIER N'EST PAS ISSU DE POKERSKILL.
+# PokerSkill est heads-up strict et n'a aucun modèle adverse.
+# Ces valeurs sont une PROPOSITION DE DÉPART, plausible et directionnellement
+# correcte, mais NON CALIBRÉE. Elles sont isolées ici précisément pour être
+# ajustables sans toucher au code, après quelques sessions de test réelles.
+#
+# Voir references/03-multiway-generalization.md.
+
+meta:
+  status: proposition_non_calibree
+  action_requise: "faire valider par l'utilisateur après tests"
+
+# --- Profondeur : 100bb au lieu des 200bb de calibration ---------------------
+
+depth_adjustment:
+  note: >
+    Les tables ATT/DEF sont calibrées 200bb. À 100bb, le SPR de départ est
+    deux fois plus bas et les seuils de commitment se déclenchent plus tôt.
+  spr_commit_threshold:
+    pokerskill_200bb: 1.5
+    proposed_100bb: 2.0
+  spr_straightforward_threshold:
+    note: "SPR < 4 → commité avec top paire+, jeu direct. SPR > 10 → planifier 2-3 rues."
+
+# --- Multiway : plus d'un adversaire encore actif ----------------------------
+
+multiway_adjustment:
+  att_multiplier_per_extra_opponent: 0.75    # ATT × 0.75^(n_opponents_active - 1)
+  def_delta_per_extra_opponent: -0.3         # DEF - 0.3 × (n_opponents_active - 1)
+
+  hard_rules:
+    - id: bluff_dies_multiway
+      when: "n_opponents_active >= 3"
+      effect: "ATT = 0 pour toutes les classes de tirage et pour trash"
+      reason: >
+        Bluffer trois joueurs, c'est demander à trois personnes de folder.
+        La fold equity s'effondre multiplicativement, elle ne décroît pas linéairement.
+    - id: value_thresholds_tighten
+      when: "n_opponents_active >= 2"
+      effect: "une main qui vaut trois barrels en HU en vaut au plus deux à trois joueurs"
+      note: "déjà porté par le multiplicateur, mais à expliciter au coach"
+
+  mdf:
+    note: >
+      PIÈGE THÉORIQUE. En heads-up, MDF = pot/(pot+bet) et un seul joueur porte
+      l'obligation. En multiway l'obligation est COLLECTIVE : c'est la fréquence
+      de fold combinée qui doit rester sous le seuil, donc chaque défenseur
+      individuel peut folder davantage.
+      Appliquer le MDF heads-up en multiway conduit à SUR-DÉFENDRE.
+    expose_two_values: [mdf_collective, mdf_individual]
+    formula_individual: "approximation : 1 - (1 - mdf_collective)^(1/n_defenders)"
+    status: "approximation à valider — ce n'est pas un résultat exact"
+
+# --- Gates exploitantes (G4) -------------------------------------------------
+# Branche le modèle adverse (archétypes HUD de la v1) sur le système de budget.
+# La source doctrinale est current-plugin/exploit-coach/references/archetype-adjustments.md
+# et current-plugin/decision-factors/SKILL.md.
+
+exploit_gates:
+
+  - id: bluff_multi_street_blocked
+    priority: 1
+    when:
+      villain_archetype: [fish, calling_station]
+      hero_line: bluff
+      street_index: ">= 2"      # 2e rue de bluff ou au-delà
+    effect: "ATT forcé à 0. L'action de mise est RETIRÉE des options viables."
+    rationale: >
+      Contre un vrai calling station, la fold equity est quasi nulle DÈS LE DÉPART,
+      pas seulement "moins bonne". Aucune mise supplémentaire ne crée de la fold
+      equity qui n'était pas là. Miser deux fois en espérant qu'il finisse par
+      folder est une erreur reconnue, pas une variante légitime.
+      Corollaire : bluffer UNE SEULE FOIS, tôt, ou pas du tout.
+    note_utilisateur: >
+      C'est la traduction directe en contrainte machine du leak documenté de
+      l'utilisateur (s'acharner à bluffer jusqu'à la river en se sentant commité).
+      Ne pas l'affaiblir en simple avertissement.
+
+  - id: fish_double_face_doctrine
+    priority: 2
+    when: { villain_archetype: [fish, calling_station] }
+    effect_open: "ÉLARGIR la range d'entrée et le premier call/mise postflop. Value bet large, bluff peu."
+    effect_after_big_calls: >
+      RESSERRER franchement l'évaluation de sa range de continuation après un ou
+      plusieurs GROS calls consécutifs. "Il paie tout" devient faux dès qu'il a
+      filtré sa propre range par des mises coûteuses.
+      Un fish qui a payé 16 puis 38 n'a plus la range qu'il avait au premier call.
+    note: "Les deux faces sont nécessaires SIMULTANÉMENT. Implémenter comme narrowing calculé, pas comme conseil."
+
+  - id: nit_late_aggression
+    priority: 3
+    when: { villain_archetype: [nit], villain_action: bet, street: [turn, river] }
+    effect: "DEF -1 cran sur les mains de force moyenne"
+
+  - id: maniac_widen_value
+    priority: 3
+    when: { villain_archetype: [maniac], hero_class: "top_pair or better" }
+    effect: "DEF élargi ; retirer fold des options viables"
+
+  - id: table_wide_fish_doctrine
+    priority: 4
+    when: "count(archetype in [fish, calling_station]) >= 2 à la table"
+    effect: >
+      Appliquer la doctrine exploit-coach correspondante par défaut sur TOUTE la
+      session, et le signaler à l'annonce du setup. Ne pas attendre que
+      l'utilisateur le demande.
+
+# --- Pondération de population pour les profils aléatoires -------------------
+# Reprise de la v1, déjà validée par l'utilisateur.
+
+random_archetype_weights:
+  fish: 0.35
+  tag: 0.30
+  lag: 0.15
+  nit: 0.12
+  maniac: 0.08
+
+archetype_baselines:   # VPIP / PFR / 3Bet% / AF — repères, pas des bornes
+  nit:    { vpip: 12, pfr: 9,  three_bet: 2,  af: 1.5 }
+  tag:    { vpip: 20, pfr: 17, three_bet: 7,  af: 3.0 }
+  lag:    { vpip: 28, pfr: 23, three_bet: 10, af: 4.0 }
+  fish:   { vpip: 45, pfr: 6,  three_bet: 1,  af: 0.8 }
+  maniac: { vpip: 55, pfr: 40, three_bet: 15, af: 6.0 }
+
+archetype_jitter: "±quelques points autour des repères à chaque tirage, sinon les sessions se ressemblent trop"

@@ -1,0 +1,36 @@
+{
+  "schema_version": "2.0",
+  "session_id": "s-test-01",
+  "hand_id": 1,
+
+  "table": { "big_blind": 1.0, "ante": 0.0, "button_seat": 0 },
+
+  "seats": [
+    { "seat": 0, "is_hero": true, "stack": 100.0, "archetype": null, "hud": null,
+      "cards": ["A♠", "K♦"], "status": "active" },
+    { "seat": 1, "is_hero": false, "stack": 100.0, "archetype": "fish", "hud": null,
+      "cards": null, "status": "active" }
+  ],
+
+  "streets": {
+    "preflop": {
+      "actions": [
+        { "seat": 0, "action": "post", "amount": 0.5 },
+        { "seat": 1, "action": "post", "amount": 1.0 },
+        { "seat": 0, "action": "raise", "amount": 3.0 },
+        { "seat": 1, "action": "call", "amount": 3.0 }
+      ]
+    },
+    "flop": {
+      "board": ["T♠", "9♥", "2♣"],
+      "actions": [
+        { "seat": 1, "action": "bet", "amount": 4.0 }
+      ]
+    },
+    "turn": null,
+    "river": null
+  },
+
+  "to_act": 0,
+  "hero_seat": 0
+}

@@ -1,0 +1,112 @@
+# Classification de texture de board et modificateurs de budget
+#
+# Source : PokerSkill, arXiv 2605.30094, annexes D.1 et E. Réécrit en données structurées.
+# calibration: HUNL 200bb.
+
+meta:
+  source: "arXiv 2605.30094 annexes D.1 et E"
+
+# --- Labels produits par le classificateur -----------------------------------
+
+labels:
+  wetness: [dry, slightly_wet, wet, very_wet]
+  suit:    [rainbow, two_tone, three_flush, four_plus_flush]   # 4+ = "one-card flush"
+  rank:    [unpaired, paired, trips, double_paired, quads,
+            straight_possible_single, straight_possible_multi, one_card_straight]
+
+# --- Effet des labels sur le prompt / la stratégie ---------------------------
+
+texture_effects:
+  dry:
+    guidance: "C-bets petits et à haute fréquence. Valeurs des mains faites stables. Value fine possible."
+    cbet_default: "25-33% pot à haute fréquence (~80%)"
+  wet:
+    guidance: "Tailles plus grandes, fréquence de c-bet plus basse. Protection et interaction avec les tirages priment."
+  two_tone_or_more:
+    guidance: "Active les avertissements tirage couleur / couleur complétée / couleur une-carte. Les mains faites hors couleur sont dévaluées."
+  straight_possible:
+    guidance: "Dévalue les paires simples et les doubles paires. Les quintes une-carte distinguent top-end et low-end."
+  paired:
+    guidance: "Risque de brelan / full. Pénalité sur les paires, bonus limité pour la carte haute au showdown."
+  trips:
+    guidance: "Table d'override quads/full/kicker remplace la logique de paire normale."
+  double_paired:
+    guidance: "L'interaction de rang des cartes privées décide : nuts, full inférieur, main partagée avec le board, ou kicker seul."
+
+# --- Pénalités de texture appliquées aux classes de paires -------------------
+# Exprimées en "crans" (levels) pour les cas sévères, en delta de budget sinon.
+
+pair_class_penalties:
+  one_card_flush:            # board 4+ même couleur, héros SANS couleur
+    overpair:  { att: 0.0, def_cap: 0.6, note: "quasi sans valeur, check/fold" }
+    top_pair:  { levels: -3.5 }
+    second_pair: { levels: -3.5 }
+    third_pair:  { levels: -3.5 }
+    fourth_fifth_pair: { levels: -3.5 }
+    weak_showdown: { levels: -3.5 }
+    nuts_high: { def: 0.0 }
+    second_high: { def: 0.0 }
+  one_card_straight_open_ended:
+    default: { levels: -2.5 }
+    nuts_high: { def: 0.0 }
+    second_high: { def: 0.0 }
+  one_card_straight_gutshot:
+    default: { levels: -1.5 }
+  flush_possible_three_flush:
+    by_street: { flop: -1.1, turn: -0.9, river: -0.7 }
+    high_card_classes_by_street: { flop: -1.0, turn: -0.7, river: -0.4 }   # nuts_high / second_high
+  straight_possible_multi:
+    by_street: { flop: -0.6, turn: -0.5, river: -0.4 }
+    high_card_classes_by_street: { flop: -0.5, turn: -0.4, river: -0.2 }
+  straight_possible_single:
+    by_street: { flop: -0.4, turn: -0.3, river: -0.2 }
+    high_card_classes_by_street: { flop: -0.3, turn: -0.2, river: -0.1 }
+  paired_board:
+    pairs_delta: -0.5           # overpair, top_pair
+    mid_low_pairs_delta: -0.4   # second_pair
+    low_pairs_delta: -0.3       # third, fourth_fifth
+    high_card_multiplier: 1.35  # nuts_high, second_high : la défense est BOOSTÉE
+    turn_pairs_rule: "Si c'est le TURN qui apparie le board, checker CETTE rue précisément (l'adversaire gagne des combos de brelan), miser les autres rues."
+
+stacking_rule: >
+  Les pénalités de texture se CUMULENT, sauf deux exceptions :
+  [flush_possible] et [one_card_flush] ne se cumulent pas — appliquer la plus sévère ;
+  [straight_possible] et [one_card_straight] ne se cumulent pas — appliquer la plus sévère.
+
+check_raise_rule: "Face à un check-raise, réévaluer sur tous les types de board."
+
+# --- Overrides de boards spéciaux --------------------------------------------
+# Sur ces textures, l'ordre normal de force des mains est trompeur.
+# Ces tables REMPLACENT la classification standard.
+
+special_board_overrides:
+  trips_board:
+    nuts: "quads et full"
+    nut_kicker:    { att: 0.5, def: 1.5 }
+    second_kicker: { def: 0.8 }
+    lower_kickers: "essentiellement trash"
+  double_paired_board:
+    nuts: "full de la paire supérieure"
+    lower_full:    { att: 2.5, def: 3.5 }
+    flush_straight:{ att: 2.0, def: 3.0 }
+    kicker_only:   "paliers dégradés en 3BP/4BP"
+  trips_plus_side_cards:
+    note: "quads = nuts ; carte assortie ou paire servie forme des paliers de full ; couleur/quinte dégradées sous le full"
+  quads_board:
+    rule: "le kicker décide"
+    nuts_high:   "nuts"
+    second_high: { att: 1.5, def: 2.5 }
+    third_high:  { att: 0.5, def: 1.5 }
+  full_house_board:
+    note: "la plupart des mains partagent le full du board ; seuls les quads ou une interaction de full supérieur jouent agressivement"
+  board_flush:
+    rule: "la plus haute carte privée de la couleur fixe le rang"
+    second_highest: { att: 3.0, def: 4.0 }
+    no_suited_card: { att: 0.0, def: 1.5 }
+  board_straight:
+    note: "généralement split, sauf si une carte privée améliore le top-end ; le contexte couleur peut dominer la quinte partagée"
+
+# --- Défense sur board apparié (flop uniquement, défenseur OOP face à une mise)
+paired_board_defense_flop_oop:
+  trips_or_non_overcard_draw: "RELANCER PETIT (33% pot). Ne PAS payer simplement."
+  pair_or_showdown: "logique de call normale"

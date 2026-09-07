@@ -1,0 +1,136 @@
+# Ranges d'ouverture (RFI), paramétrées — HU à 8-max
+#
+# ⚠️ CE FICHIER N'EST PAS ISSU DE POKERSKILL (qui est heads-up 200bb, 12 scénarios).
+# Ce sont des ranges de référence de bon régulier, PAS des sorties de solveur.
+# Voir references/03-multiway-generalization.md pour le raisonnement complet.
+#
+# INDEXATION : le format (HU / 6-max / 8-max) N'APPARAÎT PAS dans la clé.
+# Seuls comptent :
+#   n_behind     — nombre de joueurs devant encore parler derrière le héros
+#   ip_postflop  — le héros sera-t-il en position après le flop ?
+#
+# La fonction de dérivation (seats + button_seat -> n_behind, ip_postflop) est
+# la SEULE chose à écrire par format. Le reste est commun aux trois.
+
+meta:
+  status: reference_regulier
+  calibration: "100bb, sans ante, n_callers_before = 0"
+  confidence_scale: [high, medium, extrapolated]
+  importer: >
+    Prévoir `pc ranges import <fichier>` acceptant un export de charts
+    (GTO Wizard, Pio, format texte) pour écraser ces entrées. La structure
+    paramétrée fait que passer extrapolated -> high est un remplacement de
+    données, pas une refonte.
+
+rfi:
+
+  - n_behind: 7
+    ip_postflop: false
+    usual_label: "UTG 8-max"
+    pct: 12
+    range: "66+, AJs+, KQs, AQo+"
+    confidence: extrapolated
+
+  - n_behind: 6
+    ip_postflop: false
+    usual_label: "UTG+1 8-max"
+    pct: 13
+    range: "55+, ATs+, KQs, AQo+"
+    confidence: extrapolated
+
+  - n_behind: 5
+    ip_postflop: false
+    usual_label: "UTG 6-max"
+    pct: 16
+    range: "44+, A9s+, KTs+, QTs+, JTs, AJo+, KQo"
+    confidence: high
+
+  - n_behind: 4
+    ip_postflop: false
+    usual_label: "HJ 6-max"
+    pct: 20
+    range: "33+, A7s+, K9s+, Q9s+, J9s+, T9s, ATo+, KJo+"
+    confidence: high
+
+  - n_behind: 3
+    ip_postflop: false
+    usual_label: "CO 6-max"
+    pct: 27
+    range: "22+, A2s+, K7s+, Q8s+, J8s+, T8s+, 97s+, A9o+, KTo+, QJo"
+    confidence: high
+
+  - n_behind: 2
+    ip_postflop: true
+    usual_label: "BTN 6-max"
+    pct: 45
+    range: "22+, A2s+, K2s+, Q4s+, J6s+, T6s+, 95s+, 85s+, 75s+, 64s+, 54s, A2o+, K8o+, Q9o+, J9o+, T9o"
+    confidence: high
+
+  - n_behind: 1
+    ip_postflop: false
+    usual_label: "SB vs BB (6-max/8-max)"
+    pct: 40
+    range: "voir strategie_sb ci-dessous"
+    confidence: high
+
+  - n_behind: 1
+    ip_postflop: true
+    usual_label: "BTN/SB heads-up"
+    pct: 85
+    range: "tout sauf les pires offsuit déconnectées (72o-92o, 82o, 83o, 62o, 63o, 52o, 53o, 42o, 43o, 32o)"
+    confidence: high
+
+# Preuve que l'indexation par label de position ne marche pas :
+# les deux dernières entrées ont le MÊME n_behind (1) et des ranges de 40% vs 85%.
+# Le discriminant est ip_postflop, pas le nom du siège.
+
+strategie_sb:
+  probleme: >
+    La stratégie mixte raise/limp du SB est un sujet à part entière et une source
+    classique d'erreur.
+  options:
+    - id: mix_raise_limp
+      description: "Implémenter le mix. Plus proche de l'équilibre, plus difficile à enseigner."
+    - id: raise_or_fold
+      description: "Raise-or-fold pur. Légèrement moins d'EV, beaucoup plus enseignable."
+  action_requise: "ARBITRAGE UTILISATEUR — c'est un choix pédagogique autant que technique."
+
+# --- Scénarios dérivés -------------------------------------------------------
+# Ne PAS créer une table par scénario. Les dériver par transformation de la RFI.
+
+derived_scenarios:
+
+  vs_rfi:
+    inputs: [n_behind, ip_postflop, opener_n_behind, stack_bucket]
+    rule: >
+      La force de l'ouverture est inversement proportionnelle au n_behind de
+      l'ouvreur : une ouverture avec n_behind=5 (UTG) est bien plus forte qu'une
+      ouverture avec n_behind=2 (BTN), donc on défend plus serré contre la première.
+      Le n_behind du HÉROS gouverne le risque de squeeze derrière lui.
+
+  squeeze:
+    inputs: [n_behind, n_callers_before]
+    rule: "vs_rfi resserrée et polarisée. n_callers_before > 0 par définition."
+
+  vs_limp:
+    priority: haute
+    rule: "Élargir l'isolation, resserrer l'over-limp."
+    note: >
+      Ce scénario est quasi absent des ressources GTO — les solveurs ne modélisent
+      pas les limps. Mais il est TRÈS fréquent au niveau où joue l'utilisateur,
+      contre des fish. À traiter comme un scénario exploitant de première classe,
+      pas comme un cas dégénéré. C'est un endroit où le plugin peut apporter plus
+      de valeur qu'un solveur.
+
+  vs_3bet:
+    inputs: [ip_postflop, stack_bucket]
+    note: "Peu sensible au format : le pot est déjà réduit à deux joueurs. Une seule table."
+
+  vs_4bet:
+    inputs: [ip_postflop, stack_bucket]
+    note: "Idem."
+
+# --- Point de départ existant ------------------------------------------------
+# current-plugin/range-builder/references/baseline-ranges.md contient les ranges
+# 6-max de la v1 et la convention de notation déjà utilisée.
+# LIRE CE FICHIER avant de remplir celui-ci, pour ne pas créer d'incohérence.

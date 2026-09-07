@@ -1,0 +1,353 @@
+# Budgets ATTACK / DEFENSE par classe de main
+#
+# Source : PokerSkill, arXiv 2605.30094, annexe E. Réécrit en données structurées.
+# calibration: HUNL 200bb. Voir references/03-multiway-generalization.md.
+#
+# SÉMANTIQUE
+#   ATT = N  → on peut miser/relancer un cumul d'environ N rues pondérées.
+#   DEF = N  → on peut payer/continuer contre un cumul d'environ N mises pondérées.
+#              Défendre au plus N fois, au minimum N-1 fois.
+#   Les tirages n'utilisent PAS de budget DEF cumulé : leur défense s'exprime en
+#   taille maximale de mise défendable en % du pot, parce que l'équité d'un tirage
+#   dépend des cartes restantes, pas de la pression accumulée.
+#
+#   inf = illimité (sentinelle, à représenter par float('inf') dans le code)
+#
+# FORMULE
+#   B_att_restant = base(classe, contexte) - Σ w(mises précédentes)
+#   B_def_restant = base(classe, contexte) - Σ w(mises précédentes)
+#   w() : voir pressure-weights.yaml
+#
+# SEUILS DE DÉCISION
+#   raise_threshold : envisager la relance quand
+#       ATT >= (mises postflop déjà placées + rues restantes + 1)
+#   check_threshold : envisager le check pour pot control quand
+#       ATT <  (mises pondérées jusqu'ici + rues restantes + 1)
+
+meta:
+  source: "arXiv 2605.30094 annexe E"
+  calibration: "HUNL 200bb"
+
+made_hands:
+
+  nuts:
+    att: inf
+    def: inf
+    notes:
+      - "Construire le pot agressivement. Overbet envisageable sur board à avantage nut."
+      - "SPR bas : peut ralentir une rue pour piéger."
+      - "River en dernier de parole avec option de relance : TOUJOURS relancer. Payer avec les nuts perd de l'EV."
+
+  flush:
+    by_board:
+      three_flush:          # exactement 3 cartes de la même couleur au board
+        nut:        { att: inf, def: inf }
+        big:        { att: 5.0, def: 6.0 }   # carte haute > 9
+        small:      { att: 4.0, def: 5.0 }   # carte haute <= 9
+      paired:
+        nut:        { att: 5.0, def: 6.0 }
+        big:        { att: 4.3, def: 5.3 }
+        small:      { att: 3.5, def: 4.5 }
+      one_card_flush:       # 4+ cartes de la même couleur au board
+        rank_1:     { att: inf, def: inf }
+        rank_2:     { att: 4.0, def: 5.0 }
+        rank_3:     { att: 3.0, def: 4.0 }
+        rank_4:     { att: 2.4, def: 3.5 }
+        rank_5:     { att: 2.0, def: 3.0 }
+        rank_6_7:   { att: 1.5, def: 2.5 }
+        rank_8_9:   { att: 1.0, def: 2.0 }
+        paired_modifier: { nut: { att: 4.5, def: 5.5 }, others_delta: -0.5 }
+
+  straight:
+    two_card:              # les deux cartes privées contribuent
+      no_flush:     { att: 5.5, def: 6.5 }
+      three_flush:  { att: 3.5, def: 4.5 }
+      four_plus_flush: { att: 0.0, def: 1.0 }
+      paired_board:
+        nut_no_flush: { att: 5.0, def: 6.0 }
+        others_delta: -0.4
+    one_card_top_end:      # quinte nut, une seule carte privée contribue
+      no_flush:     { att: inf, def: inf }
+      three_flush:  { att: 2.5, def: 3.5 }
+      four_plus_flush: { att: 0.0, def: 1.0 }
+    one_card_low_end:      # une quinte supérieure est possible
+      no_flush:     { att: 2.5, def: 3.5 }
+      three_flush:  { att: 1.5, def: 2.5 }
+      four_plus_flush: { att: 0.0, def: 0.5 }
+    paired_board_delta: -0.6
+
+  set:
+    no_flush_no_straight: { att: inf, def: inf }
+    no_flush_with_two_card_straight:
+      one_possibility:   { att: 5.5, def: 6.5 }
+      two_possibilities: { att: 4.5, def: 5.5 }
+      three_plus:        { att: 4.0, def: 5.0 }
+    three_flush_no_ocs:  { att: 3.8, def: 4.8, per_extra_straight_delta: -0.3 }
+    ocs_one_type:        { att: 2.5, def: 3.7 }
+    ocs_two_plus:        { att: 1.5, def: 2.7 }
+    ocs_plus_three_flush_delta: -0.8   # depuis la base OCS
+    ocs_plus_four_flush: { att: 0.0, def: 0.5 }
+    four_plus_flush_no_ocs: { att: 0.0, def: 1.0 }
+
+  trips:
+    # ATT varie avec le kicker : kicker le plus bas = borne basse, A = borne haute
+    dry_board:      { att_min: 4.0, att_max: 4.5, def: 5.5, per_two_card_straight_delta: -0.3 }
+    three_flush_no_ocs: { att_min: 3.0, att_max: 3.5, def: 4.5, per_two_card_straight_delta: -0.3 }
+    ocs_one_type:   { att_min: 2.1, att_max: 2.4, def: 3.5 }
+    ocs_two_plus:   { att_min: 1.1, att_max: 1.4, def: 2.5 }
+    ocs_plus_three_flush_delta: -0.7
+    ocs_plus_four_flush: { att: 0.0, def: 0.5 }
+    four_plus_flush_no_ocs: { att: 0.0, def: 1.0 }
+
+  two_pair:
+    # Matrice de conditions, correspondance par priorité décroissante
+    priority_matrix:
+      - when: [four_plus_flush, one_card_straight]
+        value: { att: 0.0, def: 0.5 }
+      - when: [four_plus_flush]
+        value: { att: 0.0, def: 1.0 }
+      - when: [one_card_straight, three_flush]
+        value_by_ocs_types: { one: { att: 1.7, def: 2.8 }, two_plus: { att: 0.7, def: 1.9 } }
+      - when: [one_card_straight]
+        value_by_ocs_types: { one: { att: 2.2, def: 3.3 }, two_plus: { att: 1.2, def: 2.4 } }
+      - when: [three_flush]
+        value_by_rank: { att_r1: 3.6, att_r10: 2.7, def_r1: 4.7, def_r10: 3.7 }
+        per_two_card_straight_delta: -0.3
+      - when: [dry]
+        value_by_rank:
+          r1:  { att: 5.0, def: 6.5 }
+          r2:  { att: 4.7, def: 6.0 }
+          r3:  { att: 4.5, def: 5.7 }
+          r4:  { att: 4.3, def: 5.5 }
+          r5:  { att: 4.1, def: 5.3 }
+          r6:  { att: 3.9, def: 5.1 }
+          r7:  { att: 3.8, def: 5.0 }
+          r8:  { att: 3.7, def: 4.9 }
+          r9:  { att: 3.6, def: 4.8 }
+          r10: { att: 3.5, def: 4.7 }
+        per_two_card_straight_delta: -0.3
+    notes:
+      - "Top two sur board sûr : jouer pour les tapis sur toutes les rues."
+      - "Bottom two : rester agressif mais prudent sur turn/river effrayante."
+      - "Si le board est apparié, la double paire inclut la paire du board : force réelle ~ top/middle paire."
+
+  overpair:
+    by_pot_type:
+      srp_limp:
+        AA: { att: 3.5, def: 4.5 }
+        KK: { att: 3.4, def: 4.4 }
+        QQ: { att: 3.3, def: 4.3 }
+        JJ: { att: 3.2, def: 4.2 }
+        other: { att: 3.1, def: 4.1 }
+      three_bet_pot:
+        AA: { att: 3.4, def: 4.5 }
+        KK: { att: 3.2, def: 4.3 }
+        QQ: { att: 3.0, def: 4.1 }
+        JJ: { att: 2.8, def: 3.8 }
+        TT: { att: 2.6, def: 3.7 }
+        other: { att: 2.5, def: 3.5 }
+      four_bet_pot:
+        AA: { att: 3.4, def: 4.5 }
+        KK: { att: 3.1, def: 4.2 }
+        QQ: { att: 2.7, def: 3.7 }
+        JJ: { att: 2.4, def: 3.4 }
+        other: { att: 2.1, def: 3.1 }
+    notes:
+      - "Board sûr (pas de couleur possible, pas de quinte une-carte, pas de quinte possible, non apparié) : triple barrel en SRP et 3BP."
+      - "Board apparié : -0.5, mais reste fort, 2-3 rues de value. Si le TURN apparie, checker CETTE rue précisément (l'adversaire gagne des combos de brelan), miser les autres."
+      - "Ne pas jouer passivement juste parce que le board est apparié : une overpaire bat toutes les paires simples et la plupart des bluffs."
+
+  top_pair:
+    by_pot_type:
+      srp:
+        tptk:   { att: 3.0, def: 4.0 }
+        tpsk:   { att: 2.8, def: 3.8 }
+        k3:     { att: 2.6, def: 3.6 }
+        k4:     { att: 2.4, def: 3.4 }
+        k5:     { att: 2.2, def: 3.2 }
+        other:  { att: 2.1, def: 3.1 }
+      three_bet_pot:
+        tptk:   { att: 2.9, def: 3.9 }
+        tpsk:   { att: 2.6, def: 3.6 }
+        k3:     { att: 2.2, def: 3.2 }
+        other:  { att: 1.9, def: 2.9 }
+      four_bet_pot:
+        tptk:   { att: 2.6, def: 3.6 }
+        tpsk:   { att: 2.2, def: 3.2 }
+        k3:     { att: 1.8, def: 2.8 }
+        other:  { att: 1.6, def: 2.6 }
+    notes:
+      - "Board sûr : TPGK en SRP / TPTK-TPSK en 3BP → triple barrel de value. Autres kickers : miser 2 rues, checker 1 rue pour pot control."
+      - "Board apparié : -0.5. Turn qui apparie → checker cette rue."
+
+  second_pair:
+    by_pot_type:
+      srp:
+        pocket_or_top_kicker: { att: 1.8, def: 2.8 }
+        k2:    { att: 1.7, def: 2.7 }
+        k3:    { att: 1.6, def: 2.6 }
+        other: { att: 1.5, def: 2.5 }
+      three_bet_pot:
+        pocket: { att: 1.3, def: 2.5 }
+        top_kicker: { att: 1.5, def: 2.3 }
+        k2:    { att: 1.3, def: 2.1 }
+        other: { att: 1.2, def: 2.0 }
+      four_bet_pot:
+        pocket: { att: 0.0, def: 2.0 }
+        top_kicker: { att: 1.0, def: 1.8 }
+        other: { att: 0.9, def: 1.6 }
+    paired_board_delta: -0.4
+    notes:
+      - "Valeur de showdown solide → jouer pour le pot control."
+      - "Comme agresseur : c-bet flop, une rue de plus sur board sûr. Deux rues de mise maximum."
+      - "River avec seconde paire après un double barrel → CHECK BACK."
+      - "Comme défenseur SRP : check-call 2 rues. Face à une mise <= 40% pot → payer."
+
+  third_pair:
+    by_pot_type:
+      srp:   { top_kicker_or_pocket: { att: 1.2, def: 2.2 }, other: { att: 1.0, def: 2.0 } }
+      three_bet_pot: { def: 1.5 }
+      four_bet_pot:  { def: 1.2 }
+    three_bet_plus_special:
+      board_hit_pair: { att: 1.5, note: "stab <= 30% pot quand l'adversaire montre de la faiblesse, puis check river" }
+      pocket_pair:    { att: 0.0, def_3bp: 0.6, def_4bp: 0.3, note: "paire servie surclassée, seulement 2 outs" }
+    paired_board_delta: -0.3
+    notes:
+      - "SRP : c-bet flop petit (range bet ~33%), puis CHECK les rues restantes."
+      - "Défenseur SRP : payer le c-bet, check-call 1-2 rues au total, folder au triple barrel."
+
+  fourth_fifth_pair:
+    by_pot_type:
+      srp_limp: { fourth: { att: 0.8, def: 1.8 }, fifth: { att: 0.5, def: 1.5 } }
+      three_bet_pot: { def: 1.0 }
+      four_bet_pot:  { def: 0.7 }
+    three_bet_plus_special:
+      board_hit_pair: { att: 1.5 }
+      pocket_pair:    { att: 0.0, def_3bp: 0.3, def_4bp: 0.0 }
+    paired_board_delta: -0.3
+    notes:
+      - "Valeur de showdown minimale, à peine au-dessus du trash."
+      - "Ne JAMAIS miser >= 90% pour la value."
+      - "Défenseur SRP : peut payer une fois, folder au double barrel."
+      - "En 3BP/4BP : folder à la première mise significative (>= 70% pot)."
+
+  nuts_high:
+    att: 0.0
+    def_by_pot_type:
+      limp:  { min: 0.8, max: 1.2 }
+      srp:   { min: 0.6, max: 1.0 }
+      three_bet_pot: { min: 0.4, max: 0.7 }
+      four_bet_pot:  { min: 0.1, max: 0.4 }
+    paired_board_multiplier: 1.35
+    notes:
+      - "Meilleure non-paire au showdown : bat TOUS les bluffs et toutes les cartes hautes inférieures."
+      - "Ne PAS miser pour la value. Checker derrière ou payer les petites mises."
+      - "Couleur une-carte ou quinte une-carte au board → DEF = 0."
+
+  second_high:
+    att: 0.0
+    def_by_pot_type:
+      limp:  { min: 0.4, max: 0.7 }
+      srp:   { min: 0.3, max: 0.5 }
+      three_bet_pot: { min: 0.1, max: 0.3 }
+      four_bet_pot:  { min: 0.0, max: 0.0 }
+    paired_board_multiplier: 1.35
+    notes:
+      - "Showdown marginal, ne bat que les bluffs. Ne pas miser. En 3BP+ : folder à la plupart des mises."
+
+  weak_showdown:
+    by_pot_type:
+      limp_srp: { att: 0.0, def: 0.8 }
+      three_bet_pot: { att: 0.0, def: 0.4 }
+      four_bet_pot:  { att: 0.0, def: 0.2 }
+    notes:
+      - "IP en SRP/limp : checker derrière, peut payer une petite mise (<= 33% pot) sur board sec."
+      - "OOP : check-call au plus une fois sur board sec face à une petite mise ; folder aux grosses ou au double barrel."
+
+  trash:
+    att_flop_turn: { min: 0.0, max: 1.0, note: "stab/c-bet de petite taille uniquement" }
+    def: 0.0
+    notes:
+      - "Valeur de showdown nulle. Folder à toute mise."
+      - "STAB IP (l'agresseur a checké) : stab à HAUTE fréquence. Flop/turn 20-30% pot. River bluff polarisé > 60% pot."
+      - "OOP : range bets possibles (probe/c-bet 20-30% pot)."
+      - "BLUFF RIVER : si le villain check la river, envisager le bluff (rien à perdre au showdown)."
+      - "⚠️ CETTE DERNIÈRE RÈGLE EST DÉSACTIVÉE PAR LE GATE G4 face à un calling station. Voir multiway-adjustment.yaml et references/02-architecture-v2.md."
+
+draws:
+  # Défense en % du pot : taille maximale de mise défendable sur cette rue.
+  # Pas de budget cumulé.
+
+  strong_draw:
+    att: 4.0   # 4+ rues pondérées cumulées, semi-bluff multi-rues
+    def_pct_pot: { flop_ip: 500, flop_oop: 400, turn_ip: 190, turn_oop: 150 }
+    facing_allin: "implied odds = ZÉRO. Équité requise >= cotes du pot."
+    facing_check_raise: "payer — les gros tirages ont assez d'équité pour continuer."
+    combo_bonus_def: 2.0
+    notes:
+      - "Comme agresseur : jouer agressivement, miser/relancer en semi-bluff. Check-raise flop par défaut."
+      - "Exception : turn avec SPR <= 1.5 en IP → checker pour préserver l'équité."
+
+  medium_strong_draw:
+    att: 3.0
+    def_pct_pot: { flop_ip: 250, flop_oop: 200, turn_ip: 100, turn_oop: 75 }
+    def_pct_pot_vs_check_raise: { flop_ip: 150, flop_oop: 100, turn_ip: 60, turn_oop: 40 }
+    combo_bonus_def: 1.2
+
+  medium_draw:
+    att: { min: 1.5, max: 3.0 }
+    def_pct_pot: { flop_ip: 150, flop_oop: 120, turn_ip: 60, turn_oop: 40 }
+    def_pct_pot_vs_check_raise: { flop_ip: 100, flop_oop: 75, turn_ip: 40, turn_oop: 28 }
+    combo_bonus_def: 0.8
+    notes: ["Ne PAS folder les combos paire+tirage face à une mise simple."]
+
+  medium_weak_draw:
+    att: { min: 1.0, max: 2.0 }
+    def_pct_pot: { flop_ip: 94, flop_oop: 78, turn_ip: 40, turn_oop: 26 }
+    def_pct_pot_vs_check_raise: { flop_ip: 60, flop_oop: 42, turn_ip: 20, turn_oop: 14 }
+    combo_bonus_def: 0.7
+
+  weak_draw:
+    att: { min: 0.5, max: 1.0 }
+    def_pct_pot: { flop_ip: 68, flop_oop: 56, turn_ip: 24, turn_oop: 16 }
+    def_pct_pot_vs_check_raise: { flop_ip: 40, flop_oop: 28, turn: "fold" }
+    combo_bonus_def: 0.4
+
+  strong_overcard_draw:
+    att: 1.0
+    def_pct_pot: { flop_ip: 80, flop_oop: 65, turn_ip: 35, turn_oop: 25 }
+    def_pct_pot_vs_check_raise: { flop_ip: 55, flop_oop: 35, turn: "fold" }
+    combo_bonus_def: 0.3
+    downgrade_3bp: "descendre d'un cran sauf AK, AQ/KQ/AJ+backdoor couleur, AJ/KJ/AT+BD couleur+BD quinte"
+    downgrade_4bp: "descendre d'un cran sauf AK+backdoor couleur ; beaucoup deviennent trash"
+
+  medium_overcard_draw:
+    att: { min: 0.5, max: 1.0 }
+    def_pct_pot: { flop_ip: 58, flop_oop: 45, turn_ip: 23, turn_oop: 15 }
+    def_pct_pot_vs_check_raise: { flop_ip: 28, flop_oop: 18, turn: "fold" }
+    combo_bonus_def: 0.2
+    downgrade_3bp: "devient weak_overcard_draw"
+    downgrade_4bp: "devient weak_overcard_draw ou trash"
+
+  weak_overcard_draw:
+    att: 0.5
+    def_pct_pot: { flop_ip: 35, flop_oop: 25, turn_ip: 15, turn_oop: 9 }
+    def_pct_pot_vs_check_raise: "fold"
+    combo_bonus_def: 0.1
+    downgrade_3bp: "devient trash"
+    downgrade_4bp: "devient trash"
+
+# Règle de combo : main faite + tirage
+# Ajouter combo_bonus_def du tirage à la baseline DEF de la main faite.
+# Ex : seconde paire (2.5) + strong_draw (2.0) = défendre ~4.5 mises cumulées.
+# Sur board apparié, utiliser la baseline DEF paliers (nuts_high 1.5 /
+# second_high 1.0 / third_high 0.8) comme base du combo.
+
+global_modifiers:
+  position:
+    oop_made_hand_spr_gt_0_5: { def_delta: -0.3, reason: "le désavantage de position coûte de l'équité sur les rues restantes" }
+  river_re_raise:
+    def_delta: -0.3
+    reason: "la range de relance river d'un adversaire est extrêmement forte"
+  all_in:
+    rule: "face à un all-in, ou si payer met à tapis : implied odds = ZÉRO. Équité requise >= cotes du pot. Les tirages perdent l'essentiel de leur valeur."

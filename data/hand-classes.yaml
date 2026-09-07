@@ -1,0 +1,111 @@
+# Taxonomie de classification de main — 23 classes
+#
+# Source : PokerSkill, arXiv 2605.30094, annexes D.2 et E.
+# Réécrit en données structurées à partir du papier publié.
+# Le code du repo est compilé et n'a pas été utilisé.
+#
+# calibration: heads-up 200bb — voir references/03-multiway-generalization.md
+#              avant toute application multiway.
+
+meta:
+  source: "arXiv 2605.30094 (Li, Wang, Huang) — annexes D.2 et E"
+  calibration: "HUNL 200bb"
+  note: >
+    Heuristiques expertes calibrées, PAS des sorties de solveur.
+    Le coach doit dire "référence experte", jamais "la solution GTO dit".
+
+# Le classificateur retourne TOUJOURS deux valeurs : une classe de main faite
+# et une classe de tirage. Les deux peuvent être nulles (trash).
+# Règle de classification double : quand une main a les deux, suivre la
+# classification qui donne les valeurs ATT/DEF les plus HAUTES, puis appliquer
+# la règle de combo (voir att-def-budgets.yaml).
+
+made_hand_classes:
+  # 15 classes, de la plus forte à la plus faible
+  - id: nuts
+    definition: >
+      Full+ / couleur nut / quinte nut sur board sans couleur ni paire /
+      brelan servi sur board sans couleur, sans paire, sans quinte possible.
+  - id: flush
+    definition: Couleur non-nut. Sous-classée par rang de la carte haute et par type de board.
+  - id: straight
+    definition: >
+      Quinte. Distinguer deux-cartes (les deux cartes privées contribuent) et
+      une-carte (une seule contribue), et top-end vs low-end.
+  - id: set
+    definition: Brelan formé par une paire servie touchant le board.
+  - id: trips
+    definition: Brelan formé par une paire du board plus une carte privée. Kicker déterminant.
+  - id: two_pair
+    definition: >
+      Double paire sans paire au board. Sous-classée par rang de 1 (top two) à 10.
+      Si le board est apparié, la "double paire" inclut la paire du board :
+      la force réelle est celle d'une top/middle paire.
+  - id: overpair
+    definition: Paire servie supérieure à toutes les cartes du board.
+  - id: top_pair
+    definition: Paire avec la carte la plus haute du board. Sous-classée par kicker (TPTK, TPSK, 3e, 4e, 5e, autre).
+  - id: second_pair
+    definition: Paire avec 1 surcarte au board.
+  - id: third_pair
+    definition: Paire avec 2 surcartes au board.
+  - id: fourth_fifth_pair
+    definition: Paire avec 3 ou 4 surcartes au board.
+  - id: nuts_high
+    definition: Carte haute la plus élevée non présente au board (typiquement A-high). Meilleure non-paire au showdown.
+  - id: second_high
+    definition: Deuxième rang le plus élevé non présent au board (K/Q-high, kicker T+ sur board non apparié).
+  - id: weak_showdown
+    definition: Carte haute à kicker faible, ou main non appariée très marginale.
+  - id: trash
+    definition: Ni paire, ni surcarte, ni tirage. Valeur de showdown nulle.
+
+draw_classes:
+  # 8 classes
+  - id: strong_draw
+    definition: >
+      Combo draw sur board non-flushy / tirage couleur nut+ sur board flushy /
+      tirage couleur de rang >= J sur board non-flushy / tirage quinte bilatéral
+      sur board arc-en-ciel non connecté / combo draw flushy de rang >= K.
+  - id: medium_strong_draw
+    definition: >
+      Tirage couleur de rang < J sur non-flushy / combo draw flushy rang J-Q /
+      bilatéral sur arc-en-ciel connecté / bilatéral sur two-tone non connecté /
+      tirage couleur K+ sur board flushy.
+  - id: medium_draw
+    definition: >
+      Tirage couleur rang T-Q sur board flushy / bilatéral sur two-tone connecté /
+      bilatéral une-carte sur two-tone non connecté sans conditions propres /
+      combo draw flushy rang 8-T / ventral + surcartes ou backdoor couleur sur board déconnecté.
+  - id: medium_weak_draw
+    definition: >
+      Ventral deux-cartes non-flushy / ventral une-carte hors bas de quinte /
+      tirage couleur modéré rang 6+ sur flushy / combo draw flushy avec cartes de
+      couleur supérieures au-dessus / bilatéral + double surcarte sur flushy /
+      double surcarte + double backdoor.
+  - id: weak_draw
+    definition: >
+      Ventral bas sur non-flushy / bilatéral sur flushy sans surcartes /
+      très petit tirage couleur rang 2-5 sur flushy / ventral flushy + double
+      surcarte / doubles backdoors isolés.
+  - id: strong_overcard_draw
+    definition: >
+      AK/AQ deux surcartes premium / KQ ou AJ + backdoor quinte /
+      KJ/QJ/AT + backdoor couleur ou quinte deux-cartes.
+  - id: medium_overcard_draw
+    definition: >
+      Double surcarte nue de somme de rangs > 19 (KQ/KJ/QJ/QT/JT/J9) /
+      double surcarte + backdoor simple / surcarte simple T+ avec double backdoor /
+      QJ sur board K-high / KQ/KJ sur A-high sans extras.
+  - id: weak_overcard_draw
+    definition: >
+      Double surcarte nue de somme <= 19 (T8/T9/98) / surcarte simple T+ avec
+      backdoor sans paire intermédiaire / JT sur board Q-high.
+
+# Limite reconnue par les auteurs (annexe G) : la classification discrète ne
+# capture pas la nature continue de la force. Une top paire au 5e kicker reçoit
+# le budget "top_pair" alors que son profil réel est proche de "second_pair".
+#
+# → Le classificateur v2 DOIT exposer `distance_to_boundary` (0..1), et le gate
+#   doit escalader vers le LLM quand la main est proche d'une frontière.
+#   C'est une amélioration sur PokerSkill, pas une copie.
