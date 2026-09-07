@@ -1,0 +1,17 @@
+{
+  "$schema": "https://code.claude.com/schemas/marketplace.json",
+  "name": "cyrilchapon-poker-skills",
+  "description": "Personal No-Limit Texas Hold'em coaching plugin, built on a deterministic Python engine.",
+  "owner": {
+    "name": "Cyril Chapon",
+    "email": "chpn.cyril@gmail.com",
+    "url": "https://github.com/cyrilchapon"
+  },
+  "plugins": [
+    {
+      "name": "poker-coach",
+      "source": "./",
+      "description": "Personal No-Limit Texas Hold'em coach for one player: hand review, session simulation, and coaching for cash game online (heads-up to 8-max). Never plays or advises during a live hand."
+    }
+  ]
+}

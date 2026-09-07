@@ -470,8 +470,29 @@ skills/                 the 11 SKILL.md skills, rewritten as thin CLI wrappers
 tests/                  pytest suite for pokercoach/, with hand fixtures
 docs/brief/             the v2 planning package this rewrite is built from:
                         brief, architecture, analysis, audit, sources
-.claude-plugin/          plugin.json — this repo is a single Claude Code plugin
+.claude-plugin/          plugin.json + marketplace.json — this repo is a single
+                        Claude Code plugin that also serves as its own
+                        marketplace (source: "./"), see Installing below
 ```
+
+## Installing
+
+### Claude Code
+
+```
+/plugin marketplace add cyrilchapon/poker-skills
+/plugin install poker-coach
+```
+
+### claude.ai
+
+Customize (sidebar) → Plugins → **+** (Personal plugins) → **Add
+marketplace** → point it at `https://github.com/cyrilchapon/poker-skills` →
+Browse plugins → Install.
+
+Note: claude.ai, Claude Code, and the API each maintain independent
+skill/plugin state — installing here on one surface doesn't install it on
+the others.
 
 ## Data provenance
 
