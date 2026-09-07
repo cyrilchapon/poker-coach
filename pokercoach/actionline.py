@@ -79,6 +79,23 @@ def role(state: HandState, *, seat: int | None = None) -> str:
     return "aggressor" if last_aggressor(state) == seat else "probe"
 
 
+def most_relevant_villain_seat(state: HandState, *, from_seat: int) -> int | None:
+    """Le siège adverse le plus pertinent DEPUIS ``from_seat`` : le dernier
+    agresseur (celui dont l'action motive la décision analysée) s'il est
+    connu et encore en lice, sinon le premier autre siège encore en lice.
+    En heads-up c'est le seul choix possible ; en multiway c'est une
+    simplification documentée (un seul adversaire modélisé, pas tous).
+
+    Factorisé ici (plutôt que dupliqué dans ``brief.py`` et ``cli.cmd_narrow``)
+    pour que les deux consommateurs de "quel est le villain pertinent ?"
+    répondent la même chose de la même façon."""
+    others = [s.seat for s in state.seats if s.seat != from_seat and s.status in ("active", "allin")]
+    if not others:
+        return None
+    agg = last_aggressor(state)
+    return agg if agg in others else others[0]
+
+
 def last_aggressor(state: HandState) -> int | None:
     """Le siège du dernier joueur à avoir misé/relancé, toutes rues
     confondues jusqu'à la rue courante incluse (``None`` si personne n'a
@@ -119,6 +136,12 @@ def replay_pressure(state: HandState, *, upto_street: str | None = None) -> Pres
     (0.0/0.0) à chaque rue comme avant ce correctif."""
     spent = {s.seat: 0.0 for s in state.seats}
     faced = {s.seat: 0.0 for s in state.seats}
+    # Régression : `folded_or_out`/`still_in` étaient réinitialisés à CHAQUE
+    # rue, oubliant les folds des rues précédentes -- un siège foldé au
+    # préflop redevenait "encore en lice" au flop, et continuait donc à
+    # recevoir de la pression `faced` pour des mises auxquelles il n'était
+    # plus exposé. `folded_or_out` doit accumuler sur toute la main.
+    folded_or_out: set[int] = set()
 
     for street in STREETS:
         node = state.streets.get(street)
@@ -126,8 +149,7 @@ def replay_pressure(state: HandState, *, upto_street: str | None = None) -> Pres
             break
         contributed: dict[int, float] = {s.seat: 0.0 for s in state.seats}
         pot_so_far = sum(street_contribution(state, s, s2.seat) for s in STREETS[:STREETS.index(street)] for s2 in state.seats)
-        folded_or_out: set[int] = set()
-        still_in = [s.seat for s in state.seats]
+        still_in = [s.seat for s in state.seats if s.seat not in folded_or_out]
 
         for act in node["actions"]:
             seat = act["seat"]

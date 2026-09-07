@@ -27,7 +27,7 @@ from .cards import Card, CardError, parse_card, parse_cards
 
 STREETS = ("preflop", "flop", "turn", "river")
 STATUSES = ("active", "folded", "allin", "out")
-ARCHETYPES = (None, "nit", "tag", "lag", "fish", "maniac")
+ARCHETYPES = (None, "nit", "tag", "lag", "fish", "maniac", "calling_station")
 ACTIONS = ("post", "fold", "check", "call", "bet", "raise", "allin")
 
 BOARD_SIZE = {"preflop": 0, "flop": 3, "turn": 4, "river": 5}
@@ -149,12 +149,19 @@ def _validate_streets(raw_streets: Any, n_seats: int) -> dict[str, dict[str, Any
 
     streets: dict[str, dict[str, Any]] = {}
     prev_board: list[Card] = []
+    seen_gap = False
     for name in STREETS:
         node = raw_streets.get(name)
         if node is None:
             _require(name != "preflop", "streets.preflop est obligatoire")
+            seen_gap = True
             streets[name] = None
             continue
+        # Une fois une rue absente (None) rencontrée, toutes les suivantes
+        # doivent l'être aussi -- un "trou" (ex. flop:null puis turn:{...})
+        # décrirait une main qui a sauté une rue, ce qui n'existe pas.
+        _require(not seen_gap, f"streets.{name} : présente alors qu'une rue précédente est absente "
+                                "(trou dans la séquence des rues)")
 
         _require(isinstance(node, dict), f"streets.{name} : objet attendu")
 
@@ -233,6 +240,31 @@ def validate_and_load(raw: dict[str, Any]) -> HandState:
                   f"hero_seat ({declared_hero_seat!r}) incohérent avec seats[].is_hero ({hero_seat})")
 
     streets = _validate_streets(raw.get("streets"), n_seats)
+
+    # Le statut déclaré d'un siège doit être cohérent avec sa DERNIÈRE action
+    # dans l'historique : un siège qui a foldé quelque part ne peut pas être
+    # resté "active" (players_active/n_defenders/effective_stack/
+    # mdf_individual partiraient tous en vrille), et de même pour un
+    # all-in. On ne regarde que la toute dernière action de chaque siège
+    # (toutes rues confondues, dans l'ordre) : un siège ne peut plus agir
+    # après avoir foldé ou fait tapis, donc c'est forcément son état final.
+    last_action_by_seat: dict[int, str] = {}
+    for name in STREETS:
+        node = streets.get(name)
+        if node is None:
+            continue
+        for act in node["actions"]:
+            last_action_by_seat[act["seat"]] = act["action"]
+    for seat_idx, last_action in last_action_by_seat.items():
+        seat_status = seats[seat_idx].status
+        if last_action == "fold":
+            _require(seat_status == "folded",
+                      f"seats[{seat_idx}].status ({seat_status!r}) incohérent avec son historique "
+                      "(a foldé, mais le status déclaré n'est pas 'folded')")
+        elif last_action == "allin":
+            _require(seat_status == "allin",
+                      f"seats[{seat_idx}].status ({seat_status!r}) incohérent avec son historique "
+                      "(a fait tapis, mais le status déclaré n'est pas 'allin')")
 
     # Vérifie l'absence de doublon parmi toutes les cartes connues (héros,
     # villains révélés, board cumulé le plus avancé).

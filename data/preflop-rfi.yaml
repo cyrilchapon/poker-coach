@@ -87,7 +87,10 @@ rfi:
     # exercée tant que le calcul de rôle préflop confondait à tort
     # "je fais face à la blind forcée" et "je défends face à une ouverture").
     # Exclut précisément les combos nommés par la prose d'origine :
-    # 72o, 82o, 92o, 83o, 62o, 63o, 52o, 53o, 42o, 43o, 32o.
+    # 72o, 73o, 82o, 92o, 83o, 62o, 63o, 52o, 53o, 42o, 43o, 32o.
+    # (12 combos -- une revue a signalé que 73o manquait de cette liste
+    # alors qu'il est bien exclu par le token 74o+ ci-dessous : 74o+ fane
+    # le rang bas de 4 jusqu'à 6, donc exclut 72o ET 73o, pas seulement 72o.)
     range: >-
       22+,A2s+,K2s+,Q2s+,J2s+,T2s+,92s+,82s+,72s+,62s+,52s+,42s+,32s,
       A2o+,K2o+,Q2o+,J2o+,T2o+,93o+,84o+,74o+,64o+,54o

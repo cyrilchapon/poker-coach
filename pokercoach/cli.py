@@ -14,6 +14,8 @@ Sous-commandes :
     pc equity   --range1 R1 --vs R2 [--board ...] [--dead ...] [--iterations N]
                 (ou --hand hand.json pour utiliser les cartes du héros + le board de la main)
     pc narrow   --hand hand.json --action ACTION [--range R] [--villain-archetype X]
+    pc ranges   --hand hand.json --scenario {rfi,vs_rfi,vs_limp,squeeze,vs_3bet,vs_4bet}
+                [--seat N] [--opener-seat N]    lookup direct d'un scénario dérivé
     pc brief    --hand hand.json [--villain-archetype X]    ⭐ tout en un appel
     pc render   --hand hand.json
     pc showdown --board B --hand NAME:C1C2 [--hand NAME:C1C2 ...]
@@ -31,7 +33,7 @@ from . import actionline, brief as brief_mod, budget as budget_mod, glossary, ha
 from . import render as render_mod, showdown as showdown_mod, sizing as sizing_mod, texture as texture_mod
 from .cards import Card, CardError, parse_card, parse_cards
 from .equity import equity as compute_equity
-from .state import StateError, derive, position_labels, validate_and_load
+from .state import StateError, derive, n_behind as derive_n_behind_state, position_labels, validate_and_load
 
 
 def _load_hand_json(path: str) -> dict[str, Any]:
@@ -74,7 +76,17 @@ def cmd_line(args: argparse.Namespace) -> dict[str, Any]:
 
 def cmd_budget(args: argparse.Namespace) -> dict[str, Any]:
     state = _load_state(args.hand)
-    hero_cards = state.seats[state.to_act].cards
+    # Régression : lisait les cartes du siège au trait (`to_act`) mais la
+    # pression de ce même `to_act` -- cohérent entre les deux, mais divergent
+    # de `cmd_hand` (qui utilise `hero_seat` par défaut) si jamais `pc budget`
+    # est appelé hors du tour du héros, où `to_act` n'a de toute façon pas de
+    # cartes connues. `pc budget` n'a de sens que pour évaluer LE HÉROS.
+    if state.to_act != state.hero_seat:
+        raise StateError(
+            f"pc budget ne peut évaluer que le budget du héros : to_act (siège {state.to_act}) "
+            f"n'est pas hero_seat (siège {state.hero_seat})"
+        )
+    hero_cards = state.seats[state.hero_seat].cards
     if hero_cards is None or len(state.board) < 3:
         raise StateError("budget nécessite un flop et les cartes du siège au trait")
     hc = handclass.classify(hero_cards, state.board)
@@ -85,8 +97,8 @@ def cmd_budget(args: argparse.Namespace) -> dict[str, Any]:
     b = budget_mod.compute(
         hc, texture, pot_type=line["pot_type"], street=state.street,
         n_opponents_active=max(0, d.players_active - 1),
-        pressure_spent=replay.spent.get(state.to_act, 0.0),
-        pressure_faced=replay.faced.get(state.to_act, 0.0),
+        pressure_spent=replay.spent.get(state.hero_seat, 0.0),
+        pressure_faced=replay.faced.get(state.hero_seat, 0.0),
         villain_archetype=args.villain_archetype, facing_bet=d.to_call > 0,
     )
     return b.to_json()
@@ -125,6 +137,17 @@ def cmd_narrow(args: argparse.Namespace) -> dict[str, Any]:
     line = actionline.to_json(state)
     replay = actionline.replay_pressure(state)
     d = derive(state)
+    # Régression : la pression rejouée était toujours celle de `to_act` (le
+    # héros, la plupart du temps) alors que `--action` décrit l'action d'un
+    # VILLAIN dont on narrowe la range -- la pression passée à narrow() doit
+    # être celle de CE siège-là, pas celle du héros. `--seat` permet de le
+    # préciser explicitement ; à défaut, le même choix de "villain le plus
+    # pertinent" qu'utilise `pc brief` pour ses bornes G3.
+    villain_seat = args.seat
+    if villain_seat is None:
+        villain_seat = actionline.most_relevant_villain_seat(state, from_seat=state.hero_seat)
+    if villain_seat is not None and not (0 <= villain_seat < state.n_seats):
+        raise StateError(f"--seat invalide : {villain_seat!r}")
     range_str = args.range or ",".join([
         "22+", "A2s+", "K2s+", "Q4s+", "J6s+", "T6s+", "96s+", "86s+", "75s+", "64s+", "53s+",
         "A2o+", "K8o+", "Q9o+", "J9o+", "T9o",
@@ -132,11 +155,53 @@ def cmd_narrow(args: argparse.Namespace) -> dict[str, Any]:
     result = narrow_mod.narrow(
         range_str, state.board, args.action, pot_type=line["pot_type"], street=state.street,
         n_opponents_active=max(0, d.players_active - 1),
-        pressure_spent=replay.spent.get(state.to_act, 0.0),
-        pressure_faced=replay.faced.get(state.to_act, 0.0),
+        pressure_spent=replay.spent.get(villain_seat, 0.0) if villain_seat is not None else 0.0,
+        pressure_faced=replay.faced.get(villain_seat, 0.0) if villain_seat is not None else 0.0,
         villain_archetype=args.villain_archetype,
     )
     return result.to_json()
+
+
+def cmd_ranges(args: argparse.Namespace) -> dict[str, Any]:
+    """Lookup direct d'un scénario de range dérivé (``ranges/table.py``),
+    sans passer par ``pc brief`` — utile en session pour "que dit la range
+    théorique ici ?" indépendamment de la main du héros. Jusqu'ici
+    ``vs_rfi``/``vs_limp``/``squeeze``/``vs_3bet``/``vs_4bet`` n'étaient
+    appelées que par les tests, aucune sous-commande ne les exposait."""
+    from .ranges import table as range_table
+
+    state = _load_state(args.hand)
+    seat = args.seat if args.seat is not None else state.hero_seat
+    if not (0 <= seat < state.n_seats):
+        raise StateError(f"--seat invalide : {seat!r}")
+    key = range_table.derive_key(state, seat)
+
+    scenario = args.scenario
+    needs_opener = scenario in ("vs_rfi", "squeeze")
+    opener_seat = args.opener_seat
+    if needs_opener and opener_seat is None:
+        opener_seat = actionline.last_aggressor(state)
+        if opener_seat is None:
+            raise StateError(f"--opener-seat requis pour {scenario!r} (aucun agresseur détectable "
+                              "dans l'historique de la main)")
+    if opener_seat is not None and not (0 <= opener_seat < state.n_seats):
+        raise StateError(f"--opener-seat invalide : {opener_seat!r}")
+
+    if scenario == "rfi":
+        entry = range_table.rfi(key)
+    elif scenario == "vs_rfi":
+        entry = range_table.vs_rfi(key, opener_n_behind=derive_n_behind_state(state, opener_seat))
+    elif scenario == "vs_limp":
+        entry = range_table.vs_limp(key)
+    elif scenario == "squeeze":
+        entry = range_table.squeeze(key, opener_n_behind=derive_n_behind_state(state, opener_seat))
+    elif scenario == "vs_3bet":
+        entry = range_table.vs_3bet(key)
+    elif scenario == "vs_4bet":
+        entry = range_table.vs_4bet(key)
+    else:
+        raise StateError(f"scénario inconnu : {scenario!r}")
+    return entry.to_json()
 
 
 # --- brief -------------------------------------------------------------------
@@ -374,8 +439,21 @@ def build_parser() -> argparse.ArgumentParser:
     hand_arg(p)
     p.add_argument("--action", required=True, choices=["fold", "check", "call", "bet", "raise"])
     p.add_argument("--range", default=None, help="range de départ (défaut : range générique large)")
-    p.add_argument("--villain-archetype", default=None)
+    p.add_argument("--seat", type=int, default=None,
+                    help="siège du villain dont on narrowe la range (défaut : le plus pertinent "
+                         "-- dernier agresseur encore en lice, sinon premier autre siège actif)")
+    p.add_argument("--villain-archetype", default=None, choices=["nit", "tag", "lag", "fish", "maniac", "calling_station"])
     p.set_defaults(func=cmd_narrow)
+
+    p = sub.add_parser("ranges", help="lookup direct d'un scénario de range dérivé (rfi/vs_rfi/vs_limp/squeeze/vs_3bet/vs_4bet)")
+    hand_arg(p)
+    p.add_argument("--scenario", required=True,
+                    choices=["rfi", "vs_rfi", "vs_limp", "squeeze", "vs_3bet", "vs_4bet"])
+    p.add_argument("--seat", type=int, default=None, help="défaut : hero_seat")
+    p.add_argument("--opener-seat", type=int, default=None,
+                    help="siège de l'ouvreur/agresseur adverse -- requis pour vs_rfi/squeeze si "
+                         "aucun agresseur n'est détectable dans l'historique de la main")
+    p.set_defaults(func=cmd_ranges)
 
     p = sub.add_parser("brief", help="⭐ tout ce qui précède, en un appel")
     hand_arg(p)

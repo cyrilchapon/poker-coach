@@ -120,6 +120,15 @@ def _plus_connector(r1: str, r2: str, suited: str) -> list[tuple[Card, Card]]:
 def _range_between(lo: str, hi: str) -> list[tuple[Card, Card]]:
     if len(lo) == 2 and lo[0] == lo[1]:  # plage de paires, ex "22-77"
         i_lo, i_hi = RANKS.index(lo[0]), RANKS.index(hi[0])
+        # Régression : des bornes inversées (ex. "77-22") donnaient une
+        # `range()` vide -- une liste de combos vide et silencieuse plutôt
+        # qu'une erreur, alors que l'intention de l'utilisateur (une plage
+        # de paires) est claire mais mal ordonnée.
+        if i_lo > i_hi:
+            raise ValueError(
+                f"plage de paires invalide {lo!r}-{hi!r} : bornes inversées "
+                f"(rang bas d'abord, ex. \"22-77\" pas \"77-22\")"
+            )
         out = []
         for i in range(i_lo, i_hi + 1):
             out += _combos_for_ranks(RANKS[i], RANKS[i], "")
@@ -129,6 +138,13 @@ def _range_between(lo: str, hi: str) -> list[tuple[Card, Card]]:
     i_lo_high, i_lo_low = RANKS.index(lo[0]), RANKS.index(lo[1])
     i_hi_high, i_hi_low = RANKS.index(hi[0]), RANKS.index(hi[1])
     gap = i_lo_high - i_lo_low
+    # Même régression que ci-dessus, pour les plages de connecteurs (ex.
+    # "98s-JTs" au lieu de "JTs-98s" -- la convention est haut d'abord).
+    if i_hi_high > i_lo_high:
+        raise ValueError(
+            f"plage de connecteurs invalide {lo!r}-{hi!r} : bornes inversées "
+            f"(le connecteur le plus haut d'abord, ex. \"JTs-98s\" pas \"98s-JTs\")"
+        )
     out = []
     for i in range(i_hi_high, i_lo_high + 1):
         out += _combos_for_ranks(RANKS[i], RANKS[i - gap], suited)

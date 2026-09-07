@@ -147,17 +147,16 @@ def test_outs_counts_category_jumps_not_raw_score_improvements():
     # nearly all 47 remaining cards as "outs" because adding any 6th known
     # card to a 5-card known set almost always improves the best-5-of-6
     # slightly (it replaces the weakest kicker) without changing the hand's
-    # CATEGORY. Comparing handtype() category instead gives a sane count:
-    # KdQs on Kh7c2d (top pair) jumps to Two Pair or Trips on a Q (3), a K
-    # (2), a 7 (board pairs -> two pair K+77, 3) or a 2 (board pairs -> two
-    # pair K+22, 3) = 11 category-jumping cards -- nowhere near 47. All 11
-    # survive the round-2 "hero-specific" filter too (see below): hero
-    # already holds top pair Kings, so his resulting Two Pair/Trips beats
-    # what a neutral hand would get from the same card, unlike round-2's
-    # cases where hero holds nothing relevant to the pairing rank.
+    # CATEGORY. Comparing handtype() category instead gives a sane count
+    # (47 -> 11), and the round-3 fix below narrows it further to the
+    # genuinely hero-specific outs: a Q (3, kicker pairs -> two pair) or
+    # the last K (2, hero's own hole card trips up) = 5. The 7s/2s (board
+    # pairing K's existing board pair into KK77 for ANY king holder, not
+    # specific to hero) are excluded -- see
+    # test_outs_excludes_pure_board_pairing_on_an_already_made_pair.
     r = H(["K♦", "Q♠"], ["K♥", "7♣", "2♦"])
     assert r.made == "top_pair"
-    assert r.outs == 11
+    assert r.outs == 5
 
 
 def test_outs_ghost_flush_draw_no_longer_inflates_count():
@@ -198,6 +197,52 @@ def test_outs_keeps_a_flush_completion_that_happens_to_share_a_board_rank():
     assert handtype(evaluate(nine_spades_hand)) == "Flush"
     # and it must be reflected in the final outs count (see the 15 above,
     # which is 23 - 8, not 23 - 9 -- the naive rule would have given 14).
+    assert r.outs == 15
+
+
+def test_outs_excludes_pure_board_pairing_on_an_already_made_pair():
+    # Round-3 regression (re-review of round 2's fix): on K♦Q♠/K♥7♣2♦, hero
+    # already holds top pair Kings -- a 7 gives him KK77 (Two Pair), which
+    # beats a NEUTRAL hand's mere Pair(7), so round 2's neutral comparison
+    # counted it as an out. But that same 7 gives Two Pair to literally any
+    # OTHER King holder too, since the improvement comes entirely from
+    # pairing the board's own 7, not from anything specific to hero's hand.
+    # The last two Kings (his own hole card tripping up) ARE genuinely
+    # hero-specific and stay counted: 3 Qs (kicker pairs) + 2 Ks (trips)
+    # = 5, matching the reviewer's own hand count exactly.
+    r = H(["K♦", "Q♠"], ["K♥", "7♣", "2♦"])
+    assert r.made == "top_pair"
+    assert r.outs == 5
+
+
+def test_outs_still_counts_a_real_trips_out_on_an_already_made_pair():
+    # Guard against over-correcting round 3: a card that pairs one of
+    # HERO'S OWN hole cards (not just an existing board rank) is a real,
+    # hero-specific out -- even though any other holder of that exact rank
+    # would benefit identically, it's still HIS card tripping up, not a
+    # generic board-level event. An earlier draft of the round-3 fix
+    # (comparing to a "same class, different kicker" reference hand)
+    # wrongly excluded this case; the final fix (excluding only pure
+    # board-rank pairings that don't touch either hole card) does not.
+    r = H(["K♦", "Q♠"], ["K♥", "7♣", "2♦"])
+    from pokercoach.cards import parse_cards
+    from pokercoach.handeval import evaluate, handtype
+    trips_hand = parse_cards(["K♦", "Q♠"]) + parse_cards(["K♥", "7♣", "2♦", "K♠"])
+    assert handtype(evaluate(trips_hand)) == "Trips"
+    # both remaining Kings (Ks, Kc) must be among the counted outs
+    assert r.outs == 5  # 3 Qs + 2 Ks -- verified precisely, not just "> 0"
+
+
+def test_outs_pure_board_pairing_rule_does_not_break_unpaired_hands():
+    # Guard against over-scoping round 3: the "pure board pairing" rule
+    # must only kick in once hero ALREADY has a made pair -- applying it to
+    # an unpaired hand (no pair yet at all) would wrongly re-exclude a
+    # flush-completing card just because its RANK happens to coincide with
+    # an existing board rank (exactly the round-2 "naive rule" bug, cf.
+    # test_outs_keeps_a_flush_completion_that_happens_to_share_a_board_rank
+    # below -- this guards that round 2 fix doesn't regress under round 3).
+    r = H(["A♠", "K♠"], ["2♠", "5♠", "9♦"])  # nuts_high, not a made pair
+    assert r.made != "top_pair"
     assert r.outs == 15
 
 

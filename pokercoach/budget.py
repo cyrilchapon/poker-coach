@@ -61,6 +61,22 @@ def _leaf(d: dict) -> tuple[float, float]:
     return _as_float(d.get("att", 0.0)), _as_float(d.get("def", 0.0))
 
 
+def _row_by_when(matrix: list[dict], when: list[str]) -> dict:
+    """Cherche dans une ``priority_matrix`` (ex. ``two_pair`` dans
+    att-def-budgets.yaml) la ligne dont le champ ``when`` correspond
+    EXACTEMENT à ``when`` (comparaison en ensemble, ordre indifférent) —
+    plutôt que d'indexer positionnellement (``matrix[N]``), ce qui rendait
+    la sémantique du lookup dépendante de l'ordre des lignes dans le YAML
+    (réordonner le fichier changeait silencieusement quel budget sortait).
+    Lève une erreur claire si la ligne attendue n'existe pas, plutôt qu'un
+    ``IndexError``/``KeyError`` sans contexte."""
+    when_set = frozenset(when)
+    for row in matrix:
+        if frozenset(row.get("when", [])) == when_set:
+            return row
+    raise KeyError(f"priority_matrix : aucune ligne avec when={sorted(when)!r}")
+
+
 @dataclass
 class Budget:
     att_base: float
@@ -157,22 +173,22 @@ def _base_made_hands(hc: HandClass, pot_type: str, texture: Texture) -> tuple[fl
         ocs_key = {"gutshot": "one", "open_ended": "two_plus"}.get(texture.straight_shape)
 
         if suit == "four_plus_flush" and ocs_key is not None:
-            return _leaf(matrix[0]["value"])
+            return _leaf(_row_by_when(matrix, ["four_plus_flush", "one_card_straight"])["value"])
         if suit == "four_plus_flush":
-            return _leaf(matrix[1]["value"])
+            return _leaf(_row_by_when(matrix, ["four_plus_flush"])["value"])
         if ocs_key is not None and suit == "three_flush":
-            return _leaf(matrix[2]["value_by_ocs_types"][ocs_key])
+            return _leaf(_row_by_when(matrix, ["one_card_straight", "three_flush"])["value_by_ocs_types"][ocs_key])
         if ocs_key is not None:
-            return _leaf(matrix[3]["value_by_ocs_types"][ocs_key])
+            return _leaf(_row_by_when(matrix, ["one_card_straight"])["value_by_ocs_types"][ocs_key])
 
         rb = hc.made_sub.get("rank_bucket", "r10")
         idx = int(rb[1:]) if rb.startswith("r") else 10
         if suit == "three_flush":
-            by_rank = matrix[4]["value_by_rank"]
+            by_rank = _row_by_when(matrix, ["three_flush"])["value_by_rank"]
             att = by_rank["att_r1"] + (idx - 1) / 9 * (by_rank["att_r10"] - by_rank["att_r1"])
             deff = by_rank["def_r1"] + (idx - 1) / 9 * (by_rank["def_r10"] - by_rank["def_r1"])
             return att, deff
-        by_rank = matrix[5]["value_by_rank"]
+        by_rank = _row_by_when(matrix, ["dry"])["value_by_rank"]
         return _leaf(by_rank.get(f"r{idx}", by_rank["r10"]))
 
     if made == "overpair":

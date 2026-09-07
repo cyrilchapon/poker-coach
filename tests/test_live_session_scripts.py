@@ -3,6 +3,7 @@ volontairement HORS du package pokercoach — importés ici par chemin de fichie
 import copy
 import importlib.util
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -10,7 +11,8 @@ import pytest
 
 from pokercoach.state import StateError, validate_and_load
 
-SCRIPTS_DIR = Path(__file__).parent.parent / "skills" / "live-session" / "scripts"
+REPO_ROOT = Path(__file__).parent.parent
+SCRIPTS_DIR = REPO_ROOT / "skills" / "live-session" / "scripts"
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
@@ -28,6 +30,35 @@ new_hand = _load_module("new_hand")
 
 def load_fixture(name: str) -> dict:
     return json.loads((FIXTURES / name).read_text(encoding="utf-8"))
+
+
+# --- documented invocation (subprocess, not importlib) ----------------------
+
+def test_advance_street_documented_subprocess_invocation_actually_works(tmp_path):
+    # Regression: every other test here loads the script via
+    # importlib.spec_from_file_location, which never exercises the
+    # invocation SKILL.md actually documents (`python3 skills/live-session/
+    # scripts/advance_street.py ...`, run as a real subprocess) -- that path
+    # depends on `pokercoach` being importable from a FRESH interpreter
+    # (i.e. `pip install -e .` actually done), which importlib loading
+    # inside the already-running pytest process can't catch failing.
+    raw = load_fixture("hu_flop_cbet.json")
+    raw = copy.deepcopy(raw)
+    raw["streets"]["flop"]["actions"].append({"seat": 0, "action": "call", "amount": 4.0})
+    hand_path = tmp_path / "hand.json"
+    hand_path.write_text(json.dumps(raw), encoding="utf-8")
+
+    result = subprocess.run(
+        [sys.executable, str(SCRIPTS_DIR / "advance_street.py"),
+         "--hand", str(hand_path), "--deal", "5♦"],
+        cwd=REPO_ROOT, capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    derived = json.loads(result.stdout)
+    assert derived["street"] == "turn"
+
+    updated = json.loads(hand_path.read_text(encoding="utf-8"))
+    assert updated["streets"]["turn"]["board"] == ["T♠", "9♥", "2♣", "5♦"]
 
 
 # --- advance_street.py ------------------------------------------------------
@@ -163,6 +194,8 @@ def test_new_hand_split_pot_divides_evenly():
 def test_new_hand_refuses_when_hero_busts():
     raw = _hu_finished_hand()
     raw["seats"][0]["stack"] = 7.0  # hero only had 7bb this hand, all of it invested
+    raw["seats"][0] = dict(raw["seats"][0])
+    raw["seats"][0]["status"] = "allin"  # must match the allin action below
     raw["streets"]["preflop"]["actions"] = [
         {"seat": 0, "action": "post", "amount": 0.5},
         {"seat": 1, "action": "post", "amount": 1.0},
@@ -170,6 +203,7 @@ def test_new_hand_refuses_when_hero_busts():
         {"seat": 1, "action": "call", "amount": 7.0},
     ]
     raw["streets"]["flop"]["actions"] = []
+    raw["to_act"] = 1  # seat 0 is now allin, can't be to_act
     with pytest.raises(StateError, match="bust"):
         new_hand.build_next_hand(raw, winners=[1])
 
@@ -228,7 +262,7 @@ def test_new_hand_refuses_when_table_shrinks_past_the_expected_blind_seats():
             {"seat": 1, "is_hero": False, "stack": 20.0, "archetype": "tag", "hud": None,
              "cards": None, "status": "active"},
             {"seat": 2, "is_hero": False, "stack": 3.0, "archetype": "nit", "hud": None,
-             "cards": None, "status": "active"},
+             "cards": None, "status": "allin"},
         ],
         "streets": {
             "preflop": {"actions": [

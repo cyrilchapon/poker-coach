@@ -26,11 +26,69 @@ from ..state import HandState, effective_stack, ip_postflop as derive_ip_postflo
 
 DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
 
+# Nombre total de combos de départ dans le deck -- C(52,2), PAS "les combos
+# par type de main" (régression revue #2 : le nom précédent, _COMBOS_PER_TYPE,
+# disait l'inverse de la ligne). Le nombre de combos par type est 6/4/12
+# selon paire/suited/offsuit -- c'est _combo_count() ci-dessous. TOTAL_COMBOS
+# sert de dénominateur pour convertir un pourcentage en cible de combos dans
+# top_pct_range().
+TOTAL_COMBOS = 1326  # C(52,2)
+
+
+def _combo_count(hand_type: str) -> int:
+    if len(hand_type) == 2:  # paire, ex. "AA"
+        return 6
+    return 4 if hand_type[2] == "s" else 12
+
 
 @lru_cache(maxsize=1)
 def _rfi_doc() -> dict:
     with open(DATA_DIR / "preflop-rfi.yaml", encoding="utf-8") as f:
         return yaml.safe_load(f)
+
+
+@lru_cache(maxsize=1)
+def _strength_ranking() -> list[str]:
+    """Les 169 types de main, du plus fort au plus faible par équité brute
+    contre une range aléatoire -- cf. data/hand-strength-ranking.yaml pour
+    la méthode et les limites documentées de cette approximation."""
+    with open(DATA_DIR / "hand-strength-ranking.yaml", encoding="utf-8") as f:
+        doc = yaml.safe_load(f)
+    return [row["hand"] for row in doc["ranking"]]
+
+
+def top_pct_range(pct: float) -> str:
+    """Range parseable (``equity.parse_range``) représentant le TOP ``pct``%
+    des combos de départ par équité brute, en cumulant les types du
+    classement (data/hand-strength-ranking.yaml) jusqu'à couvrir ce
+    pourcentage de combos. Matérialise en notation réelle les scénarios
+    dérivés (vs_rfi, squeeze, vs_3bet, vs_4bet) qui ne connaissent qu'un
+    pourcentage de continuation, pas une liste de mains -- sans quoi ces
+    scénarios restaient du code mort (aucun moyen de tester "la main du
+    héros est-elle dans ce X% ?»)."""
+    pct = max(0.0, min(100.0, pct))
+    target_combos = pct / 100.0 * TOTAL_COMBOS
+    included: list[str] = []
+    cumulative = 0.0
+    for hand_type in _strength_ranking():
+        if cumulative >= target_combos:
+            break
+        count = _combo_count(hand_type)
+        # Ce type ferait-il dépasser la cible ? L'ancien code l'incluait
+        # alors systématiquement (régression revue #2 : biais permanent vers
+        # le haut, ex. top_pct_range(1.0) -> 1,36% au lieu de 1,0% car
+        # AA,KK,QQ=18 combos est inclus alors qu'AA,KK=12 combos en est plus
+        # proche). On choisit désormais la borne la plus proche de la cible
+        # -- sauf pour le tout premier type, toujours inclus (sinon une
+        # cible trop petite renverrait une range vide).
+        if included and cumulative + count > target_combos:
+            distance_without = target_combos - cumulative
+            distance_with = cumulative + count - target_combos
+            if distance_without < distance_with:
+                break
+        included.append(hand_type)
+        cumulative += count
+    return ",".join(included)
 
 
 @dataclass
@@ -126,7 +184,12 @@ def vs_rfi(key: RangeKey, *, opener_n_behind: int) -> RangeEntry:
     """Défense face à une ouverture. Formule d'approximation (pas une table) :
     la largeur de défense est mise à l'échelle de la force implicite de
     l'ouverture adverse (une ouverture UTG => plus forte => on défend plus
-    serré ; une ouverture BTN => plus large => on défend plus large)."""
+    serré ; une ouverture BTN => plus large => on défend plus large).
+
+    ``range`` est maintenant une vraie notation parseable (top_pct_range),
+    pas seulement la prose "~X% (largeur approximée)" — nécessaire pour que
+    ``pc brief`` puisse tester "la main du héros est-elle dedans ?" (avant,
+    ce champ ne pouvait être qu'affiché, jamais vérifié — code mort)."""
     # La BB (n_behind=0) n'ouvre jamais, donc n'a pas de ligne RFI propre —
     # on prend la SB (n_behind=1, non-IP) comme plafond de référence pour
     # tout défenseur sans ligne RFI directe (approximation documentée).
@@ -136,8 +199,7 @@ def vs_rfi(key: RangeKey, *, opener_n_behind: int) -> RangeEntry:
     factor = min(1.0, opener["pct"] / reference_widest_pct)
     pct = round(ceiling["pct"] * factor, 1)
     return RangeEntry(
-        scenario="vs_rfi", range=f"~{pct}% (top range du héros, largeur approximée)",
-        pct=pct, confidence="extrapolated",
+        scenario="vs_rfi", range=top_pct_range(pct), pct=pct, confidence="extrapolated",
         note=f"vs ouverture {opener.get('usual_label', '?')} (pct {opener['pct']}%)",
     )
 
@@ -145,7 +207,15 @@ def vs_rfi(key: RangeKey, *, opener_n_behind: int) -> RangeEntry:
 def vs_limp(key: RangeKey) -> RangeEntry:
     """Isolation face à un limp — scénario exploitant de première classe
     (quasi absent des ressources GTO, très fréquent au niveau de l'utilisateur).
-    Élargie par rapport à la RFI standard."""
+    Élargie par rapport à la RFI standard.
+
+    ``range`` reste ``row.range`` (la range RFI curée à la main), pas
+    ``top_pct_range(pct)`` (régression revue #2) : c'est le seul des cinq
+    scénarios dérivés qui disposait déjà d'une donnée curée et déjà
+    parseable -- la remplacer par une bande synthétique par équité brute
+    l'aurait rendue strictement moins fiable sans rien gagner en
+    testabilité, contrairement à vs_rfi/squeeze/vs_3bet/vs_4bet qui n'
+    avaient qu'un pourcentage de continuation, aucune liste de mains."""
     row = rfi(key)
     if row.pct == 0:
         return row
@@ -159,9 +229,11 @@ def squeeze(key: RangeKey, *, opener_n_behind: int) -> RangeEntry:
     if base.pct == 0:
         return base
     pct = round(base.pct * 0.6, 1)
-    return RangeEntry(scenario="squeeze", range=f"~{pct}% (polarisée, resserrée depuis vs_rfi)",
-                       pct=pct, confidence="extrapolated",
-                       note="squeeze : range de vs_rfi resserrée et polarisée")
+    return RangeEntry(scenario="squeeze", range=top_pct_range(pct), pct=pct,
+                       confidence="extrapolated",
+                       note="squeeze : range de vs_rfi resserrée et polarisée (top-pct%, pas une "
+                            "vraie polarisation value/bluff -- top_pct_range() ne sait produire "
+                            "qu'un intervalle contigu par force brute, cf. limite documentée)")
 
 
 _VS_3BET_BASE = {True: 45.0, False: 30.0}    # ip_postflop -> pct de continuation
@@ -171,11 +243,11 @@ _STACK_ADJUST = {"short": 1.15, "standard": 1.0, "deep": 0.9}
 
 def vs_3bet(key: RangeKey) -> RangeEntry:
     pct = round(_VS_3BET_BASE[key.ip_postflop] * _STACK_ADJUST[key.stack_bucket], 1)
-    return RangeEntry(scenario="vs_3bet", range=f"~{pct}% de continuation", pct=pct,
+    return RangeEntry(scenario="vs_3bet", range=top_pct_range(pct), pct=pct,
                        confidence="extrapolated", note="peu sensible au format : pot déjà réduit à 2 joueurs")
 
 
 def vs_4bet(key: RangeKey) -> RangeEntry:
     pct = round(_VS_4BET_BASE[key.ip_postflop] * _STACK_ADJUST[key.stack_bucket], 1)
-    return RangeEntry(scenario="vs_4bet", range=f"~{pct}% de continuation", pct=pct,
+    return RangeEntry(scenario="vs_4bet", range=top_pct_range(pct), pct=pct,
                        confidence="extrapolated", note="peu sensible au format : pot déjà réduit à 2 joueurs")
