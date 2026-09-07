@@ -72,13 +72,91 @@ def test_sb_rfi_is_a_disjoint_mixed_raise_limp_strategy():
     assert raise_combos.isdisjoint(limp_combos)  # jamais les deux à la fois pour une même main
 
 
+def test_hu_btn_sb_rfi_excludes_exactly_the_documented_offsuit_combos():
+    # Regression: the YAML comment claimed 11 excluded offsuit combos but
+    # the actual range (via the "74o+"-style fan notation) excludes 12 --
+    # "73o" was missing from the documented list, silently mismatched from
+    # what the range notation actually produces.
+    from pokercoach.equity import RANKS, parse_range
+
+    state = validate_and_load(minimal_hand(2, button_seat=0, hero_seat=0))  # HU BTN/SB
+    key = table.derive_key(state, 0)
+    entry = table.rfi(key)
+
+    combos = parse_range(entry.range)
+    offsuit_rank_pairs = {
+        frozenset(c.rank for c in wc.combo)
+        for wc in combos
+        if wc.combo[0].rank != wc.combo[1].rank and wc.combo[0].suit != wc.combo[1].suit
+    }
+
+    expected_excluded = {
+        frozenset(pair) for pair in
+        ["72", "73", "82", "92", "83", "62", "63", "52", "53", "42", "43", "32"]
+    }
+    all_offsuit_types = {
+        frozenset((a, b)) for i, a in enumerate(RANKS) for b in RANKS[i + 1:]
+    }
+    expected_included = all_offsuit_types - expected_excluded
+
+    assert offsuit_rank_pairs == expected_included
+    assert offsuit_rank_pairs.isdisjoint(expected_excluded)
+
+
+def test_top_pct_range_returns_a_parseable_range_close_to_the_requested_pct():
+    from pokercoach.equity import parse_range
+
+    combos = parse_range(table.top_pct_range(15.0))
+    # 1326 total combos; top-15% should land close to 15% by combo count
+    # (rounds up to the next full hand-type crossing the threshold).
+    assert 0.10 < len(combos) / 1326 < 0.20
+
+
+def test_top_pct_range_is_monotonic_and_starts_with_the_strongest_hands():
+    from pokercoach.equity import parse_range
+
+    def combo_set(pct):
+        return {frozenset((c.rank, c.suit) for c in wc.combo) for wc in parse_range(table.top_pct_range(pct))}
+
+    narrow, wide = combo_set(2.0), combo_set(20.0)
+    assert narrow < wide  # strictly smaller, and a subset (monotonic widening)
+    assert table.top_pct_range(1.0).startswith("AA")  # strongest hand type first
+
+
+def test_top_pct_range_clamps_to_full_range_above_100_pct():
+    from pokercoach.equity import parse_range
+    assert len(parse_range(table.top_pct_range(100.0))) == 1326
+    assert len(parse_range(table.top_pct_range(150.0))) == 1326
+
+
 def test_narrow_removes_combos_that_cannot_support_a_raise():
     board = parse_cards(["9♦", "6♣", "2♥"])
     # Some pressure already spent this street: trash (ATT baseline ~0.5) can
     # no longer fund a raise, an overpair (ATT baseline ~3+) still can.
+    # Regression: combos that fail purely because pressure exhausted their
+    # budget are no longer dropped outright -- they're retained at a small
+    # floor weight (MIN_BLUFF_FLOOR_WEIGHT) rather than vanishing entirely,
+    # so `remaining_combos` (a count) no longer shrinks; `remaining_weight`
+    # (the actual retained probability mass) does.
     result = narrow.narrow("QQ+,72o", board, "raise", pot_type="srp", street="flop",
                             pressure_spent=1.0)
-    assert result.remaining_combos < result.original_combos
+    assert result.remaining_weight < result.original_weight
+    assert "72o" not in result.range_str  # exact combos, not the bare token
+    assert "@8.00%" in result.range_str  # 72o's combos floored, not dropped
+
+
+def test_narrow_drops_structurally_excluded_combos_entirely_not_floored():
+    # Regression guard alongside the floor mechanism above: a combo cut by a
+    # STRUCTURAL rule (bluff_dies_multiway -- "this line makes no sense
+    # multiway", not "pressure ran the budget dry") must stay a hard
+    # exclusion, not receive the pressure-exhaustion floor -- otherwise the
+    # fix for the degenerate-bounds problem would silently walk back the
+    # multiway/exploit gates' own deliberate "no bluffs here" rulings.
+    board = parse_cards(["T♦", "8♣", "3♥"])
+    result = narrow.narrow("96s,QQ+", board, "bet", pot_type="srp", street="flop",
+                            n_opponents_active=3)
+    for suit in "♠♥♦♣":
+        assert f"9{suit}6{suit}" not in result.range_str  # dropped entirely, no @xx% floor either
 
 
 def test_narrow_fold_keeps_everything():
@@ -100,4 +178,4 @@ def test_narrow_bet_removes_combos_that_cannot_fund_a_bet():
     board = parse_cards(["9♦", "6♣", "2♥"])
     result = narrow.narrow("QQ+,72o", board, "bet", pot_type="srp", street="flop",
                             pressure_spent=1.0)
-    assert result.remaining_combos < result.original_combos
+    assert result.remaining_weight < result.original_weight

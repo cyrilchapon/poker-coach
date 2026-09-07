@@ -18,7 +18,7 @@ def run(argv, capsys):
 def test_cli_help_never_crashes_for_any_subcommand(capsys):
     # Regression guard: argparse treats "%" in help strings as old-style
     # format specifiers — an unescaped "%pot" crashes --help at parse time.
-    for cmd in ["state", "hand", "texture", "line", "budget", "equity", "narrow",
+    for cmd in ["state", "hand", "texture", "line", "budget", "equity", "narrow", "ranges",
                 "brief", "render", "showdown", "sizing", "glossary", "apply"]:
         with pytest.raises(SystemExit) as exc:
             main([cmd, "--help"])
@@ -57,6 +57,94 @@ def test_cli_narrow_two_pair_path_does_not_crash(capsys, tmp_path):
                            "--range", "94o,42o,QQ+"], capsys)
     assert code == 0, err
     assert json.loads(out)["original_combos"] > 0
+
+
+def test_cli_narrow_accepts_calling_station_villain_archetype(capsys):
+    # Regression: --villain-archetype had no `choices=` on `pc narrow` at
+    # all (unlike `pc budget`/`pc brief`), so nothing validated it and
+    # "calling_station" specifically wasn't documented as accepted there.
+    code, out, err = run(
+        ["narrow", "--hand", HAND, "--action", "call", "--villain-archetype", "calling_station"],
+        capsys)
+    assert code == 0, err
+
+
+def test_cli_ranges_rfi_lookup(capsys):
+    code, out, err = run(["ranges", "--hand", HAND, "--scenario", "rfi"], capsys)
+    assert code == 0, err
+    result = json.loads(out)
+    assert result["scenario"] == "rfi"
+    assert result["confidence"] in ("high", "n/a")
+
+
+def test_cli_ranges_vs_rfi_requires_an_opener_when_none_is_detectable(capsys, tmp_path):
+    # No preflop raise by anyone -- no aggressor to isolate as --opener-seat
+    # automatically for a defend scenario, must be told explicitly.
+    hand = json.loads(Path(HAND).read_text())
+    hand["streets"] = {"preflop": {"actions": [
+        {"seat": 0, "action": "post", "amount": 0.5},
+        {"seat": 1, "action": "post", "amount": 1.0},
+    ]}, "flop": None, "turn": None, "river": None}
+    hand["to_act"] = 0
+    p = tmp_path / "h.json"
+    p.write_text(json.dumps(hand))
+    code, out, err = run(["ranges", "--hand", str(p), "--scenario", "vs_rfi"], capsys)
+    assert code == 1
+    assert "opener" in err
+
+
+def test_cli_ranges_vs_rfi_with_explicit_opener_seat(capsys, tmp_path):
+    hand = json.loads(Path(HAND).read_text())
+    hand["streets"] = {"preflop": {"actions": [
+        {"seat": 0, "action": "post", "amount": 0.5},
+        {"seat": 1, "action": "post", "amount": 1.0},
+        {"seat": 0, "action": "raise", "amount": 3.0},
+    ]}, "flop": None, "turn": None, "river": None}
+    hand["to_act"] = 1
+    p = tmp_path / "h.json"
+    p.write_text(json.dumps(hand))
+    code, out, err = run(["ranges", "--hand", str(p), "--scenario", "vs_rfi", "--opener-seat", "0"], capsys)
+    assert code == 0, err
+    result = json.loads(out)
+    assert result["scenario"] == "vs_rfi"
+    assert result["confidence"] == "extrapolated"
+
+
+def test_cli_narrow_uses_the_villains_pressure_not_the_heros(capsys):
+    # Regression: pressure_spent/pressure_faced passed to narrow() was
+    # always to_act's (the hero, in this fixture) -- not the villain whose
+    # range is actually being narrowed. hu_flop_cbet.json gives hero (seat
+    # 0) and villain (seat 1) genuinely different accumulated pressure
+    # (hero's preflop raise vs. villain's flop bet), so using the wrong
+    # seat measurably changes the retained range.
+    code_hero, out_hero, err = run(
+        ["narrow", "--hand", HAND, "--action", "call", "--seat", "0"], capsys)
+    assert code_hero == 0, err
+    code_villain, out_villain, err = run(
+        ["narrow", "--hand", HAND, "--action", "call", "--seat", "1"], capsys)
+    assert code_villain == 0, err
+    assert json.loads(out_hero) != json.loads(out_villain)
+
+    # Default (no --seat) must resolve to the villain (seat 1, the flop
+    # bettor and hero's only opponent in this HU spot) -- not to_act/hero.
+    code_default, out_default, err = run(
+        ["narrow", "--hand", HAND, "--action", "call"], capsys)
+    assert code_default == 0, err
+    assert json.loads(out_default) == json.loads(out_villain)
+
+
+def test_cli_budget_refuses_when_it_is_not_the_heros_turn(capsys, tmp_path):
+    # Regression: cmd_budget read to_act's cards but cmd_hand defaults to
+    # hero_seat -- an inconsistency that only matters, but matters a lot,
+    # when to_act != hero_seat (budget would then either crash on missing
+    # cards or silently evaluate the wrong seat's pressure).
+    hand = json.loads(Path(HAND).read_text())
+    hand["to_act"] = 1  # villain's seat, not hero's
+    p = tmp_path / "h.json"
+    p.write_text(json.dumps(hand))
+    code, out, err = run(["budget", "--hand", str(p)], capsys)
+    assert code == 1
+    assert "héros" in err or "hero" in err
 
 
 def test_cli_apply_call_computes_amount(capsys, tmp_path):

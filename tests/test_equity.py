@@ -58,6 +58,28 @@ def test_parse_range_dash_range_pairs():
     assert ranks == {"2", "3", "4"}
 
 
+def test_parse_range_dash_range_connectors():
+    combos = parse_range("JTs-98s")
+    rank_pairs = {frozenset(c.rank for c in wc.combo) for wc in combos}
+    assert rank_pairs == {frozenset("JT"), frozenset("T9"), frozenset("98")}
+    assert all(wc.combo[0].suit == wc.combo[1].suit for wc in combos)  # all suited
+
+
+def test_parse_range_inverted_pair_bounds_raises_instead_of_silently_empty():
+    # Regression: "77-22" (bounds in the wrong order) used to return an
+    # empty combo list with no error -- silently producing an empty/wrong
+    # range instead of failing loudly on what's clearly a typo.
+    with pytest.raises(ValueError, match="inversées"):
+        parse_range("77-22")
+
+
+def test_parse_range_inverted_connector_bounds_raises_instead_of_silently_empty():
+    # Regression: "98s-JTs" (lower connector listed first) used to return
+    # an empty combo list with no error.
+    with pytest.raises(ValueError, match="inversées"):
+        parse_range("98s-JTs")
+
+
 def test_equity_aa_dominates_kk_preflop():
     r = equity("AA", "KK")
     assert r.range1_equity > 0.75

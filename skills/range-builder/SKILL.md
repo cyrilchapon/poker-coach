@@ -9,7 +9,7 @@ description: Construit avec l'utilisateur une range concrète (open-raise, 3bet,
 
 Le point de départ n'est plus `references/baseline-ranges.md` seul : `pc brief --hand hand.json` en préflop renvoie un champ `range` avec le pourcentage/la notation de référence pour la situation exacte (scénario, `n_behind`, `ip_postflop`, profondeur), et un `confidence` (`high` / `medium` / `extrapolated`). **Toujours dire la confidence à l'utilisateur** — HU et 6-max sont `high`, 7/8-max s'appuie sur une extrapolation explicite (`extrapolated`), pas des charts vérifiés. Voir `docs/brief/references/03-multiway-generalization.md` pour le raisonnement complet ; `references/baseline-ranges.md` (v1) reste la référence de notation 6-max d'origine si un recoupement est utile.
 
-Scénarios dérivés (pas des tables séparées, des transformations depuis la RFI — `pokercoach/ranges/table.py`) : `vs_rfi`, `vs_limp` (élargi, traité en scénario exploitant de première classe, pas dégénéré), `squeeze`, `vs_3bet`, `vs_4bet`. Toujours `confidence: extrapolated` — ce sont des formules d'approximation documentées, pas des sorties de solveur.
+Scénarios dérivés (pas des tables séparées, des transformations depuis la RFI — `pokercoach/ranges/table.py`) : `vs_rfi`, `vs_limp` (élargi, traité en scénario exploitant de première classe, pas dégénéré), `squeeze`, `vs_3bet`, `vs_4bet`. Toujours `confidence: extrapolated` — ce sont des formules d'approximation documentées, pas des sorties de solveur. `pc brief` les câble automatiquement dès que le héros défend (préflop hors ouverture) ; pour un lookup direct indépendant d'une main de héros donnée, `pc ranges --hand hand.json --scenario {rfi,vs_rfi,vs_limp,squeeze,vs_3bet,vs_4bet} [--seat N] [--opener-seat N]`.
 
 ## Dépendances
 

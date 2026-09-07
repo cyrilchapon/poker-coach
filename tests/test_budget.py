@@ -94,3 +94,52 @@ def test_exploit_gate_does_not_apply_on_flop_first_barrel():
                 pressure_spent=0.0, pressure_faced=0.0, villain_archetype="fish")
     # street_index(flop)=1 < 2 -> gate not triggered (single early stab still allowed)
     assert not any("bluff_multi_street_blocked" in r["reason"] for r in b.removed)
+
+
+# --- two_pair priority_matrix: key-based, not positional --------------------
+
+def test_row_by_when_finds_by_content_not_position():
+    from pokercoach.budget import _row_by_when
+
+    matrix = [
+        {"when": ["a", "b"], "value": {"att": 1.0, "def": 1.0}},
+        {"when": ["a"], "value": {"att": 2.0, "def": 2.0}},
+        {"when": ["c"], "value": {"att": 3.0, "def": 3.0}},
+    ]
+    assert _row_by_when(matrix, ["c"])["value"]["att"] == 3.0
+    assert _row_by_when(matrix, ["a", "b"])["value"]["att"] == 1.0
+    assert _row_by_when(matrix, ["b", "a"])["value"]["att"] == 1.0  # order within `when` irrelevant
+
+    with pytest.raises(KeyError):
+        _row_by_when(matrix, ["nonexistent"])
+
+
+def test_two_pair_budget_is_unchanged_by_reordering_the_priority_matrix(monkeypatch):
+    # Regression: `matrix[0]`...`matrix[5]` positional indexing meant
+    # reordering att-def-budgets.yaml's `two_pair.priority_matrix` list
+    # would silently change which row a given board/hand matched. Now that
+    # rows are found by their own `when` tags (_row_by_when), the lookup
+    # must be identical regardless of list order.
+    import copy
+
+    from pokercoach import budget as budget_mod
+
+    hc, tex = hc_and_texture(["J♠", "T♥"], ["J♦", "T♣", "4♥"])  # two pair, dry board
+    assert hc.made == "two_pair"
+
+    original_table = budget_mod._att_def()
+    original_result = budget_mod._base_made_hands(hc, "srp", tex)
+
+    # Reverse (not a random shuffle) so every one of the 6 rows is
+    # GUARANTEED to land at a different index -- in particular the "dry"
+    # row this hand needs (originally last) moves to first. A positional
+    # `matrix[5]` lookup would then read a completely different row.
+    shuffled_table = copy.deepcopy(original_table)
+    shuffled_matrix = shuffled_table["made_hands"]["two_pair"]["priority_matrix"]
+    shuffled_matrix.reverse()
+    assert [r["when"] for r in shuffled_matrix] != [r["when"] for r in original_table["made_hands"]["two_pair"]["priority_matrix"]]
+
+    monkeypatch.setattr(budget_mod, "_att_def", lambda: shuffled_table)
+    shuffled_result = budget_mod._base_made_hands(hc, "srp", tex)
+
+    assert shuffled_result == original_result

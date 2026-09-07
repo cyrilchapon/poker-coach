@@ -76,10 +76,22 @@ def g2_budget_decisive(*, envisaged_action: str, viable_actions: list[str],
     if envisaged_action not in ("raise", "call", "bet") or envisaged_action in viable_actions:
         return None
     if not facing_bet:
-        fallback = "check"
-    else:
-        fallback = "call" if "call" in viable_actions else "fold"
-    return GateDecision(gate="G2", verdict=fallback, confidence="forced")
+        # Pas de mise à comparer -> pas de seuil de rentabilité -> G3 ne
+        # peut structurellement pas contredire un repli "check" (toujours
+        # gratuit). Confiance "forced" légitime, rien à dégrader ici.
+        return GateDecision(gate="G2", verdict="check", confidence="forced")
+    fallback = "call" if "call" in viable_actions else "fold"
+    # Régression (revue automatisée) : ce repli s'annonçait "forced" alors
+    # que c'est une heuristique tabulée (budget ATT/DEF), pas une déduction
+    # déterministe comme G0/G1 -- contrairement au cas "check" ci-dessus,
+    # une équité RÉELLEMENT calculée (G3) peut la contredire (repro
+    # vérifiée : ce repli rendait "fold" sur un spot où l'équité calculée
+    # donnait 52-64% contre 30% requis). "strong" plutôt que "forced" :
+    # honnête sur le statut épistémique sans changer la verbosité ni
+    # forcer un calcul de G3 systématique (qui viderait la cascade de son
+    # intérêt coût/qualité) -- voir brief.py pour le flag de désaccord
+    # exposé quand G3 est calculé quand même (``--depth full``).
+    return GateDecision(gate="G2", verdict=fallback, confidence="strong")
 
 
 def g3_equity_bounds(*, lower_bound: float, upper_bound: float, threshold: float) -> GateDecision | None:

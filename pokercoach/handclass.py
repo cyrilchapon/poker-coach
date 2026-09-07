@@ -414,6 +414,32 @@ def _neutral_filler(exclude_ranks: set[str], board: list[Card]) -> list[Card]:
     return pool[:2]  # repli improbable (deck presque épuisé)
 
 
+def _is_pure_board_pairing_for_a_made_hand(hole: list[Card], board: list[Card], candidate: Card) -> bool:
+    """True si le héros a DÉJÀ une main faite de la famille "paire simple"
+    (pas une paire de poche) et que ``candidate`` n'apparie qu'un rang déjà
+    présent au board SANS toucher à l'une ou l'autre des deux cartes du
+    héros -- un pur appariement de board, partagé mécaniquement par
+    QUICONQUE tient une carte de ce rang, quel que soit son kicker.
+
+    Round 3 de la régression outs : la comparaison à une main neutre
+    (round 2) ne suffit pas ici, parce que la paire PRÉ-EXISTANTE du héros
+    se propage mécaniquement dans la comparaison même quand la carte
+    n'apporte rien de spécifique à LUI -- un 7 qui donne KK77 sur
+    K♥7♣2♦ à un héros K♦Q♠ bat une main neutre (simple paire de 7), mais
+    le ferait tout autant pour N'IMPORTE QUEL AUTRE porteur de roi, peu
+    importe son kicker : ce n'est pas un avantage propre au héros. Une
+    carte qui apparie au contraire l'une de ses DEUX cartes en main (ex.
+    le dernier roi, donnant un brelan) reste comptée normalement : c'est
+    une amélioration réellement spécifique à ce qu'il tient, même si
+    d'autres porteurs du même rang en profiteraient identiquement -- au
+    contraire du cas board-only, ici c'est SA carte qui s'apparie."""
+    if hole[0].rank == hole[1].rank:
+        return False  # paire de poche -- pas concerné par cette règle
+    hole_ranks = {c.rank for c in hole}
+    board_ranks = {c.rank for c in board}
+    return candidate.rank in board_ranks and candidate.rank not in hole_ranks
+
+
 def _count_outs(hole: list[Card], board: list[Card]) -> int:
     # Régression (round 1) : comparer le score BRUT (`evaluate(...) > current`)
     # comptait presque toutes les cartes restantes comme "out", parce
@@ -433,7 +459,28 @@ def _count_outs(hole: list[Card], board: list[Card]) -> int:
     # héros à celle qu'obtiendrait une main NEUTRE (sans rapport avec le
     # héros ni le board) recevant la même carte : si le héros ne fait pas
     # MIEUX qu'une main neutre, ce n'est pas un out qui lui est propre.
+    #
+    # Régression (round 3) : pour une main DÉJÀ FAITE (ex. top pair), la
+    # comparaison à une main neutre laisse quand même passer des cartes qui
+    # n'apportent rien de spécifique au héros -- un 7 qui donne KK77 à un
+    # héros top-pair-Kings bat une main neutre (simple paire de 7), mais
+    # bat tout aussi bien N'IMPORTE QUEL AUTRE porteur de roi (même KK + un
+    # 7 quelconque) : la paire pré-existante du héros se propage
+    # mécaniquement dans la comparaison au neutre, peu importe si la carte
+    # touche VRAIMENT ses cartes à lui. `_is_pure_board_pairing_for_a_made_hand`
+    # exclut ce cas précis (apparie le board, pas les cartes du héros) tout
+    # en laissant compter les cartes qui apparient réellement l'une de ses
+    # deux cartes (ex. le dernier roi, qui donne un brelan -- amélioration
+    # bien spécifique à ce qu'il tient, même si tout autre porteur de ce
+    # rang en profiterait pareil).
     current_category_idx = HAND_CATEGORIES.index(handtype(evaluate(hole + board)))
+    # La règle round-3 ne s'applique QUE si le héros a déjà une paire simple
+    # -- sinon (ex. A♠K♠ sur un board 4-flush, pas encore de paire du tout)
+    # elle exclurait à tort une carte qui complète un tirage couleur juste
+    # parce que son rang coïncide avec un rang du board (exactement le
+    # défaut de la règle naïve écartée au round 2 : cf. _is_pure_board_
+    # pairing_for_a_made_hand, qui ne regarde QUE les rangs, pas les suits).
+    hero_already_has_a_pair = current_category_idx == HAND_CATEGORIES.index("Pair")
     known = set(hole) | set(board)
     remaining = [c for c in FULL_DECK if c not in known]
 
@@ -441,6 +488,8 @@ def _count_outs(hole: list[Card], board: list[Card]) -> int:
     for c in remaining:
         hero_idx = HAND_CATEGORIES.index(handtype(evaluate(hole + board + [c])))
         if hero_idx <= current_category_idx:
+            continue
+        if hero_already_has_a_pair and _is_pure_board_pairing_for_a_made_hand(hole, board, c):
             continue
         exclude_ranks = {card.rank for card in hole} | {card.rank for card in board} | {c.rank}
         neutral = _neutral_filler(exclude_ranks, board)

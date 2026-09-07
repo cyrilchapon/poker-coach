@@ -251,3 +251,72 @@ def test_out_of_range_seat_count_is_rejected():
     raw["seats"] = raw["seats"][:1]
     with pytest.raises(StateError):
         validate_and_load(raw)
+
+
+# --- status vs. action-history cross-check --------------------------------
+
+def test_seat_that_folded_but_kept_active_status_is_rejected():
+    # Regression: nothing cross-checked a seat's declared status against its
+    # OWN action history -- a seat could fold and stay "active", silently
+    # breaking players_active/n_defenders/effective_stack/mdf_individual.
+    raw = minimal_hand(3, button_seat=0, hero_seat=0)
+    raw["seats"] = [dict(s) for s in raw["seats"]]
+    raw["streets"]["preflop"]["actions"] = [
+        {"seat": 1, "action": "fold", "amount": 0.0},
+        {"seat": 0, "action": "check", "amount": 0.0},
+    ]
+    # seat 1 folded but its declared status is still "active"
+    with pytest.raises(StateError, match="incohérent avec son historique"):
+        validate_and_load(raw)
+
+
+def test_seat_that_went_allin_but_kept_active_status_is_rejected():
+    raw = minimal_hand(2, button_seat=0, hero_seat=0)
+    raw["seats"] = [dict(s) for s in raw["seats"]]
+    raw["seats"][1]["stack"] = 5.0
+    raw["streets"]["preflop"]["actions"] = [
+        {"seat": 1, "action": "allin", "amount": 5.0},
+        {"seat": 0, "action": "call", "amount": 5.0},
+    ]
+    # seat 1 shoved but its declared status is still "active"
+    with pytest.raises(StateError, match="incohérent avec son historique"):
+        validate_and_load(raw)
+
+
+def test_folded_and_allin_seats_with_matching_status_are_accepted():
+    raw = minimal_hand(3, button_seat=0, hero_seat=0)
+    raw["seats"] = [dict(s) for s in raw["seats"]]
+    raw["seats"][1]["status"] = "folded"
+    raw["seats"][2]["status"] = "allin"
+    raw["seats"][2]["stack"] = 3.0
+    raw["streets"]["preflop"]["actions"] = [
+        {"seat": 1, "action": "fold", "amount": 0.0},
+        {"seat": 2, "action": "allin", "amount": 3.0},
+        {"seat": 0, "action": "call", "amount": 3.0},
+    ]
+    state = validate_and_load(raw)  # must not raise
+    assert state.seats[1].status == "folded"
+    assert state.seats[2].status == "allin"
+
+
+# --- street-gap validation -------------------------------------------------
+
+def test_calling_station_is_a_valid_seat_archetype():
+    # Regression: "calling_station" is a real villain_archetype accepted by
+    # budget.compute() and offered via --villain-archetype on `pc budget`/
+    # `pc brief`, but was missing from state.ARCHETYPES -- a live-session
+    # HUD tag of "calling_station" on a physical seat was rejected outright.
+    raw = minimal_hand(2, button_seat=0)
+    raw["seats"] = [dict(s) for s in raw["seats"]]
+    raw["seats"][1]["archetype"] = "calling_station"
+    state = validate_and_load(raw)  # must not raise
+    assert state.seats[1].archetype == "calling_station"
+
+
+def test_street_gap_is_rejected():
+    # Regression: `flop: null` followed by `turn: {...}` used to be silently
+    # accepted -- a hand can't skip a street.
+    raw = minimal_hand(2, button_seat=0)
+    raw["streets"]["turn"] = {"board": ["9♦", "6♣", "2♥", "3♦"], "actions": []}
+    with pytest.raises(StateError, match="trou"):
+        validate_and_load(raw)

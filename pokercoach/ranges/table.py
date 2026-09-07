@@ -26,11 +26,53 @@ from ..state import HandState, effective_stack, ip_postflop as derive_ip_postflo
 
 DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
 
+# Nombre de combos par type de main (paire / suited / offsuit) -- constant
+# quel que soit le rang, utilisé pour cumuler des COMBOS (pas des types)
+# jusqu'au pourcentage demandé dans top_pct_range().
+_COMBOS_PER_TYPE = 1326  # C(52,2)
+
+
+def _combo_count(hand_type: str) -> int:
+    if len(hand_type) == 2:  # paire, ex. "AA"
+        return 6
+    return 4 if hand_type[2] == "s" else 12
+
 
 @lru_cache(maxsize=1)
 def _rfi_doc() -> dict:
     with open(DATA_DIR / "preflop-rfi.yaml", encoding="utf-8") as f:
         return yaml.safe_load(f)
+
+
+@lru_cache(maxsize=1)
+def _strength_ranking() -> list[str]:
+    """Les 169 types de main, du plus fort au plus faible par équité brute
+    contre une range aléatoire -- cf. data/hand-strength-ranking.yaml pour
+    la méthode et les limites documentées de cette approximation."""
+    with open(DATA_DIR / "hand-strength-ranking.yaml", encoding="utf-8") as f:
+        doc = yaml.safe_load(f)
+    return [row["hand"] for row in doc["ranking"]]
+
+
+def top_pct_range(pct: float) -> str:
+    """Range parseable (``equity.parse_range``) représentant le TOP ``pct``%
+    des combos de départ par équité brute, en cumulant les types du
+    classement (data/hand-strength-ranking.yaml) jusqu'à couvrir ce
+    pourcentage de combos. Matérialise en notation réelle les scénarios
+    dérivés (vs_rfi, squeeze, vs_3bet, vs_4bet) qui ne connaissent qu'un
+    pourcentage de continuation, pas une liste de mains -- sans quoi ces
+    scénarios restaient du code mort (aucun moyen de tester "la main du
+    héros est-elle dans ce X% ?»)."""
+    pct = max(0.0, min(100.0, pct))
+    target_combos = pct / 100.0 * _COMBOS_PER_TYPE
+    included: list[str] = []
+    cumulative = 0.0
+    for hand_type in _strength_ranking():
+        if cumulative >= target_combos:
+            break
+        included.append(hand_type)
+        cumulative += _combo_count(hand_type)
+    return ",".join(included)
 
 
 @dataclass
@@ -126,7 +168,12 @@ def vs_rfi(key: RangeKey, *, opener_n_behind: int) -> RangeEntry:
     """Défense face à une ouverture. Formule d'approximation (pas une table) :
     la largeur de défense est mise à l'échelle de la force implicite de
     l'ouverture adverse (une ouverture UTG => plus forte => on défend plus
-    serré ; une ouverture BTN => plus large => on défend plus large)."""
+    serré ; une ouverture BTN => plus large => on défend plus large).
+
+    ``range`` est maintenant une vraie notation parseable (top_pct_range),
+    pas seulement la prose "~X% (largeur approximée)" — nécessaire pour que
+    ``pc brief`` puisse tester "la main du héros est-elle dedans ?" (avant,
+    ce champ ne pouvait être qu'affiché, jamais vérifié — code mort)."""
     # La BB (n_behind=0) n'ouvre jamais, donc n'a pas de ligne RFI propre —
     # on prend la SB (n_behind=1, non-IP) comme plafond de référence pour
     # tout défenseur sans ligne RFI directe (approximation documentée).
@@ -136,8 +183,7 @@ def vs_rfi(key: RangeKey, *, opener_n_behind: int) -> RangeEntry:
     factor = min(1.0, opener["pct"] / reference_widest_pct)
     pct = round(ceiling["pct"] * factor, 1)
     return RangeEntry(
-        scenario="vs_rfi", range=f"~{pct}% (top range du héros, largeur approximée)",
-        pct=pct, confidence="extrapolated",
+        scenario="vs_rfi", range=top_pct_range(pct), pct=pct, confidence="extrapolated",
         note=f"vs ouverture {opener.get('usual_label', '?')} (pct {opener['pct']}%)",
     )
 
@@ -150,7 +196,7 @@ def vs_limp(key: RangeKey) -> RangeEntry:
     if row.pct == 0:
         return row
     pct = round(min(100.0, row.pct * 1.3), 1)
-    return RangeEntry(scenario="vs_limp", range=row.range, pct=pct, confidence="extrapolated",
+    return RangeEntry(scenario="vs_limp", range=top_pct_range(pct), pct=pct, confidence="extrapolated",
                        note="isolation élargie face à un limp — traiter en scénario exploitant, pas dégénéré")
 
 
@@ -159,9 +205,11 @@ def squeeze(key: RangeKey, *, opener_n_behind: int) -> RangeEntry:
     if base.pct == 0:
         return base
     pct = round(base.pct * 0.6, 1)
-    return RangeEntry(scenario="squeeze", range=f"~{pct}% (polarisée, resserrée depuis vs_rfi)",
-                       pct=pct, confidence="extrapolated",
-                       note="squeeze : range de vs_rfi resserrée et polarisée")
+    return RangeEntry(scenario="squeeze", range=top_pct_range(pct), pct=pct,
+                       confidence="extrapolated",
+                       note="squeeze : range de vs_rfi resserrée et polarisée (top-pct%, pas une "
+                            "vraie polarisation value/bluff -- top_pct_range() ne sait produire "
+                            "qu'un intervalle contigu par force brute, cf. limite documentée)")
 
 
 _VS_3BET_BASE = {True: 45.0, False: 30.0}    # ip_postflop -> pct de continuation
@@ -171,11 +219,11 @@ _STACK_ADJUST = {"short": 1.15, "standard": 1.0, "deep": 0.9}
 
 def vs_3bet(key: RangeKey) -> RangeEntry:
     pct = round(_VS_3BET_BASE[key.ip_postflop] * _STACK_ADJUST[key.stack_bucket], 1)
-    return RangeEntry(scenario="vs_3bet", range=f"~{pct}% de continuation", pct=pct,
+    return RangeEntry(scenario="vs_3bet", range=top_pct_range(pct), pct=pct,
                        confidence="extrapolated", note="peu sensible au format : pot déjà réduit à 2 joueurs")
 
 
 def vs_4bet(key: RangeKey) -> RangeEntry:
     pct = round(_VS_4BET_BASE[key.ip_postflop] * _STACK_ADJUST[key.stack_bucket], 1)
-    return RangeEntry(scenario="vs_4bet", range=f"~{pct}% de continuation", pct=pct,
+    return RangeEntry(scenario="vs_4bet", range=top_pct_range(pct), pct=pct,
                        confidence="extrapolated", note="peu sensible au format : pot déjà réduit à 2 joueurs")

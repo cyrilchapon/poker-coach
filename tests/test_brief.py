@@ -12,6 +12,76 @@ def load_fixture(name: str) -> dict:
     return json.loads((FIXTURES / name).read_text(encoding="utf-8"))
 
 
+def test_brief_refuses_when_it_is_not_the_heros_turn():
+    # Regression: hero_seat/to_act were mixed within compute() (preflop read
+    # to_act's cards, postflop read hero_seat's, pressure always to_act's) --
+    # if they ever diverged, the brief silently mixed hero's cards with
+    # someone else's pot/to_call/budget context instead of failing loudly.
+    raw = load_fixture("hu_flop_cbet.json")
+    raw = dict(raw)
+    raw["to_act"] = 1  # villain's seat, not hero's
+    with pytest.raises(ValueError, match="hero"):
+        brief.compute(raw)
+
+
+def test_brief_flags_disagreement_between_g2_fold_and_a_contradicting_g3(monkeypatch):
+    # Deterministic version of the review's finding (G2's budget-exhausted
+    # fold can contradict a genuinely calculated G3) -- rather than hunting
+    # for a fragile natural fixture that happens to trigger both budget
+    # exhaustion AND a specific equity spread, force the G3 side via
+    # monkeypatch and check the disagreement flag/verdict-stability directly.
+    from pokercoach import brief as brief_mod
+    from pokercoach.gates import GateDecision
+
+    raw = load_fixture("hu_flop_cbet.json")
+    raw = dict(raw)
+    raw["streets"] = dict(raw["streets"])
+    # A huge overbet exhausts hero's DEF budget on a weak hand -> G2 forces fold.
+    raw["streets"]["flop"] = {"board": raw["streets"]["flop"]["board"],
+                               "actions": [{"seat": 1, "action": "bet", "amount": 40.0}]}
+
+    gate_only = brief.compute(raw)
+    assert gate_only["gate"] == "G2"
+    assert gate_only["verdict"] == "fold"
+    assert gate_only["confidence"] == "strong"  # not "forced" (see test_gates.py)
+
+    contradicting_g3 = GateDecision(gate="G3", verdict="call_or_raise", confidence="strong")
+    monkeypatch.setattr(
+        brief_mod, "_compute_equity_section",
+        lambda *a, **k: ({"lower_bound": 0.6, "upper_bound": 0.7, "threshold": 0.3,
+                           "vs_range_wide": "AA", "vs_range_narrow": "AA",
+                           "method": "enumeration_or_monte_carlo"}, contradicting_g3),
+    )
+    full = brief.compute(raw, force_full=True)
+    assert full["gate"] == "G2"
+    assert full["verdict"] == "fold"  # G2's verdict is never overridden by G3
+    assert full["gate_disagreement"]["closing_gate"] == "G2"
+    assert full["gate_disagreement"]["closing_verdict"] == "fold"
+    assert full["gate_disagreement"]["g3_verdict"] == "call_or_raise"
+
+
+def test_brief_no_disagreement_flag_when_g3_agrees(monkeypatch):
+    from pokercoach import brief as brief_mod
+    from pokercoach.gates import GateDecision
+
+    raw = load_fixture("hu_flop_cbet.json")
+    raw = dict(raw)
+    raw["streets"] = dict(raw["streets"])
+    raw["streets"]["flop"] = {"board": raw["streets"]["flop"]["board"],
+                               "actions": [{"seat": 1, "action": "bet", "amount": 40.0}]}
+
+    agreeing_g3 = GateDecision(gate="G3", verdict="fold", confidence="strong")
+    monkeypatch.setattr(
+        brief_mod, "_compute_equity_section",
+        lambda *a, **k: ({"lower_bound": 0.1, "upper_bound": 0.15, "threshold": 0.3,
+                           "vs_range_wide": "22", "vs_range_narrow": "22",
+                           "method": "enumeration_or_monte_carlo"}, agreeing_g3),
+    )
+    full = brief.compute(raw, force_full=True)
+    assert full["verdict"] == "fold"
+    assert "gate_disagreement" not in full
+
+
 def test_brief_no_bet_facing_never_recommends_call_or_fold():
     # Regression: a weak hand with to_call == 0 (checked to) used to fall
     # through to G2 with verdict "call" (the budget module always offered
@@ -146,6 +216,129 @@ def test_brief_sb_mixed_strategy_three_way_split():
     assert all(out["gate"] == "G1" for out in (raise_hand, limp_hand, fold_hand))
 
 
+def _defend_hand(hero_cards: list[str], preflop_actions: list[dict], *, n_seats: int = 3) -> dict:
+    return {
+        "schema_version": "2.0",
+        "table": {"big_blind": 1.0, "ante": 0.0, "button_seat": 0},
+        "seats": [
+            {"seat": i, "is_hero": i == n_seats - 1, "stack": 200.0, "archetype": None,
+             "hud": None, "cards": hero_cards if i == n_seats - 1 else None, "status": "active"}
+            for i in range(n_seats)
+        ],
+        "streets": {
+            "preflop": {"actions": preflop_actions},
+            "flop": None, "turn": None, "river": None,
+        },
+        "to_act": n_seats - 1, "hero_seat": n_seats - 1,
+    }
+
+
+def test_brief_defends_vs_rfi_no_longer_falls_through_to_g5():
+    # Regression: `pc brief` covered RFI (opening) but every DEFENDING
+    # decision (facing an open/limp/3bet/4bet) fell through to G5 -- the
+    # engine never used ranges/table.py's vs_rfi/vs_limp/squeeze/vs_3bet/
+    # vs_4bet, even though they existed and were unit-tested in isolation.
+    strong = brief.compute(_defend_hand(["A♠", "K♠"], [
+        {"seat": 0, "action": "post", "amount": 0.5},
+        {"seat": 1, "action": "post", "amount": 1.0},
+        {"seat": 2, "action": "raise", "amount": 3.0},  # someone opened -- hero (seat0, BB here) defends
+    ], n_seats=3))
+    weak = brief.compute(_defend_hand(["7♠", "2♥"], [
+        {"seat": 0, "action": "post", "amount": 0.5},
+        {"seat": 1, "action": "post", "amount": 1.0},
+        {"seat": 2, "action": "raise", "amount": 3.0},
+    ], n_seats=3))
+    for out in (strong, weak):
+        assert out["gate"] == "G1"
+        assert out["range"]["scenario"] == "vs_rfi"
+        assert out["range"]["confidence"] == "extrapolated"
+    assert strong["verdict"] == "raise_or_call"
+    assert weak["verdict"] == "fold"
+
+
+def test_brief_defends_vs_limp():
+    # 4-handed, hero on the BTN (seat0) isolating a limp from CO (seat3,
+    # the first to act preflop in a 4-max game -- BB (seat2) has no RFI row
+    # of its own, since it can never open, so vs_limp needs a hero position
+    # that DOES to produce a real range; testing from BTN matches the
+    # realistic "isolate a limper" spot anyway).
+    raw = {
+        "schema_version": "2.0",
+        "table": {"big_blind": 1.0, "ante": 0.0, "button_seat": 0},
+        "seats": [
+            {"seat": 0, "is_hero": True, "stack": 200.0, "archetype": None, "hud": None,
+             "cards": ["A♠", "A♥"], "status": "active"},
+            {"seat": 1, "is_hero": False, "stack": 200.0, "archetype": None, "hud": None,
+             "cards": None, "status": "active"},
+            {"seat": 2, "is_hero": False, "stack": 200.0, "archetype": None, "hud": None,
+             "cards": None, "status": "active"},
+            {"seat": 3, "is_hero": False, "stack": 200.0, "archetype": None, "hud": None,
+             "cards": None, "status": "active"},
+        ],
+        "streets": {
+            "preflop": {"actions": [
+                {"seat": 1, "action": "post", "amount": 0.5},
+                {"seat": 2, "action": "post", "amount": 1.0},
+                {"seat": 3, "action": "call", "amount": 1.0},  # CO limps (first to act, 4-max)
+            ]},
+            "flop": None, "turn": None, "river": None,
+        },
+        "to_act": 0, "hero_seat": 0,
+    }
+    out = brief.compute(raw)
+    assert out["gate"] == "G1"
+    assert out["range"]["scenario"] == "vs_limp"
+    assert out["verdict"] == "raise_or_call"
+
+
+def test_brief_facing_a_raise_and_a_caller_squeezes_not_just_defends_vs_rfi():
+    # A raise followed by a call before hero acts is a squeeze opportunity,
+    # not a simple heads-up defend against the opener -- pot_type() still
+    # reports "srp" (only one raise so far), so this must be distinguished
+    # from test_brief_defends_vs_rfi_no_longer_falls_through_to_g5 above by
+    # actually checking for a call after the raise.
+    raw = _defend_hand(["A♠", "K♠"], [], n_seats=4)
+    raw["streets"]["preflop"]["actions"] = [
+        {"seat": 1, "action": "post", "amount": 0.5},
+        {"seat": 2, "action": "post", "amount": 1.0},
+        {"seat": 3, "action": "raise", "amount": 3.0},
+        {"seat": 0, "action": "call", "amount": 3.0},
+    ]
+    out = brief.compute(raw)
+    assert out["gate"] == "G1"
+    assert out["range"]["scenario"] == "squeeze"
+
+
+def test_brief_defends_vs_3bet():
+    # Hero (seat 2) opens, villain 3bets -- hero now faces vs_3bet.
+    raw = _defend_hand(["A♠", "A♥"], [], n_seats=3)
+    raw["streets"]["preflop"]["actions"] = [
+        {"seat": 0, "action": "post", "amount": 0.5},
+        {"seat": 1, "action": "post", "amount": 1.0},
+        {"seat": 2, "action": "raise", "amount": 3.0},   # hero (seat2) opens
+        {"seat": 0, "action": "raise", "amount": 9.0},   # villain 3bets
+    ]
+    out = brief.compute(raw)
+    assert out["gate"] == "G1"
+    assert out["range"]["scenario"] == "vs_3bet"
+
+
+def test_brief_defends_vs_4bet():
+    # Hero (seat 2) 3bets, villain 4bets -- hero now faces vs_4bet.
+    raw = _defend_hand(["A♠", "A♥"], [], n_seats=3)
+    raw["streets"]["preflop"]["actions"] = [
+        {"seat": 0, "action": "post", "amount": 0.5},
+        {"seat": 1, "action": "post", "amount": 1.0},
+        {"seat": 0, "action": "raise", "amount": 3.0},
+        {"seat": 1, "action": "raise", "amount": 9.0},
+        {"seat": 2, "action": "raise", "amount": 21.0},  # hero (seat2) 3bets
+        {"seat": 0, "action": "raise", "amount": 45.0},  # villain 4bets
+    ]
+    out = brief.compute(raw)
+    assert out["gate"] == "G1"
+    assert out["range"]["scenario"] == "vs_4bet"
+
+
 def test_brief_postflop_smoke():
     raw = load_fixture("hu_flop_cbet.json")
     out = brief.compute(raw)
@@ -220,6 +413,52 @@ def test_brief_narrows_villain_range_through_action_history():
     seed_combos = len(parse_range(NARROW_VILLAIN_SEED))
     result_combos = len(parse_range(out["equity"]["vs_range_narrow"]))
     assert result_combos < seed_combos
+
+
+def test_brief_g3_bounds_are_not_degenerate_after_heavy_multi_street_pressure():
+    # Regression: narrow.narrow()'s binary keep/drop filter made villain
+    # ranges collapse to "100% value hands, 0% bluffs" once accumulated
+    # pressure exhausted every weak class's ATT budget -- a 3-barrel river
+    # spot narrowed both wide and narrow seeds down to sets/two-pair only,
+    # giving G3 equity bounds of EXACTLY [0.0, 0.0] (an artefact, not a
+    # measurement: every remaining combo trivially beats hero). The
+    # bluff-retention floor (MIN_BLUFF_FLOOR_WEIGHT) keeps a residual
+    # non-value presence in the range so the bounds stay informative.
+    raw = {
+        "schema_version": "2.0",
+        "table": {"big_blind": 1.0, "ante": 0.0, "button_seat": 0},
+        "seats": [
+            {"seat": 0, "is_hero": False, "stack": 500.0, "archetype": "tag", "hud": None,
+             "cards": None, "status": "active"},
+            {"seat": 1, "is_hero": True, "stack": 500.0, "archetype": None, "hud": None,
+             "cards": ["A♥", "Q♦"], "status": "active"},
+        ],
+        "streets": {
+            "preflop": {"actions": [
+                {"seat": 1, "action": "post", "amount": 0.5},
+                {"seat": 0, "action": "post", "amount": 1.0},
+                {"seat": 1, "action": "raise", "amount": 3.0},
+                {"seat": 0, "action": "call", "amount": 3.0},
+            ]},
+            "flop": {"board": ["A♣", "7♦", "2♠"], "actions": [
+                {"seat": 0, "action": "bet", "amount": 6.0},
+                {"seat": 1, "action": "call", "amount": 6.0},
+            ]},
+            "turn": {"board": ["A♣", "7♦", "2♠", "9♥"], "actions": [
+                {"seat": 0, "action": "bet", "amount": 40.0},
+                {"seat": 1, "action": "call", "amount": 40.0},
+            ]},
+            "river": {"board": ["A♣", "7♦", "2♠", "9♥", "4♣"], "actions": [
+                {"seat": 0, "action": "bet", "amount": 150.0},
+            ]},
+        },
+        "to_act": 1, "hero_seat": 1,
+    }
+    out = brief.compute(raw, force_full=True)
+    assert out["state"]["street"] == "river"
+    eq = out["equity"]
+    assert (eq["lower_bound"], eq["upper_bound"]) != (0.0, 0.0)
+    assert eq["upper_bound"] > eq["lower_bound"] >= 0.0
 
 
 def test_brief_never_crashes_on_river():

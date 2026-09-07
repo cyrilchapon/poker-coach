@@ -46,6 +46,44 @@ def test_pressure_replay_hu_fixture():
     assert replay.faced[0] == pytest.approx(replay.spent[1])
 
 
+def test_pressure_faced_not_attributed_to_a_seat_folded_on_an_earlier_street():
+    # Regression: `still_in`/`folded_or_out` were reset to fresh state at
+    # the top of EVERY street's loop, forgetting folds from earlier streets
+    # -- a seat that folded preflop would still count as "still in" (and
+    # accumulate `faced` pressure) for a flop bet it was no longer exposed
+    # to at all.
+    raw = {
+        "schema_version": "2.0",
+        "table": {"big_blind": 1.0, "ante": 0.0, "button_seat": 0},
+        "seats": [
+            {"seat": 0, "is_hero": False, "stack": 100.0, "archetype": None, "hud": None,
+             "cards": None, "status": "folded"},
+            {"seat": 1, "is_hero": True, "stack": 100.0, "archetype": None, "hud": None,
+             "cards": ["A♠", "K♠"], "status": "active"},
+            {"seat": 2, "is_hero": False, "stack": 100.0, "archetype": None, "hud": None,
+             "cards": None, "status": "active"},
+        ],
+        "streets": {
+            "preflop": {"actions": [
+                {"seat": 1, "action": "post", "amount": 0.5},
+                {"seat": 2, "action": "post", "amount": 1.0},
+                {"seat": 0, "action": "fold", "amount": 0.0},
+                {"seat": 1, "action": "call", "amount": 1.0},
+                {"seat": 2, "action": "check", "amount": 1.0},
+            ]},
+            "flop": {"board": ["9♦", "6♣", "2♥"], "actions": [
+                {"seat": 1, "action": "bet", "amount": 4.0},
+            ]},
+            "turn": None, "river": None,
+        },
+        "to_act": 2, "hero_seat": 1,
+    }
+    state = validate_and_load(raw)
+    replay = replay_pressure(state)
+    assert replay.faced[0] == pytest.approx(0.0)  # folded before the flop bet even happened
+    assert replay.faced[2] > 0.0  # still in, correctly faces it
+
+
 def test_role_aggressor_and_probe_when_not_facing_a_bet():
     # Regression guard: role() must not shadow the last_aggressor() call
     # with a same-named local when to_call == 0 (aggressor/probe branch).

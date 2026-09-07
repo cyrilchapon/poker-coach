@@ -1,0 +1,358 @@
+# Classement des 169 types de mains de départ par équité brute contre une
+# range "adversaire aléatoire" (22+,A2s+,...,32o -- littéralement deux cartes
+# au hasard), calculée UNE FOIS via pokercoach.equity.equity() (Monte-Carlo,
+# 15000 itérations, seed déterministe du moteur) et figée ici en donnée
+# statique -- recalculer à chaque lancement de pc coûterait ~40s.
+#
+# Sert de base à ranges.table.top_pct_range() : les scénarios dérivés
+# (vs_rfi, vs_limp, squeeze, vs_3bet, vs_4bet) ne connaissent qu'un
+# pourcentage de continuation (ex. "~23%"), jamais une liste de mains --
+# ce classement permet de matérialiser "le top 23%" en une vraie notation de
+# range parseable (equity.parse_range), en cumulant les COMBOS (pas les
+# types : 6 par paire, 4 par suited, 12 par offsuit) dans l'ordre de ce
+# classement jusqu'au pourcentage demandé.
+#
+# Approximation documentée, pas un classement GTO : l'équité brute contre
+# "n'importe quelle main" ignore la position, le format de table et la
+# jouabilité postflop (un connecteur suité peut valoir plus que son équité
+# brute ne le suggère). cf. README, section calibration.
+
+ranking:
+  - hand: "AA"
+    equity_vs_random: 0.8521
+  - hand: "KK"
+    equity_vs_random: 0.8251
+  - hand: "QQ"
+    equity_vs_random: 0.7978
+  - hand: "JJ"
+    equity_vs_random: 0.7691
+  - hand: "TT"
+    equity_vs_random: 0.7428
+  - hand: "99"
+    equity_vs_random: 0.7116
+  - hand: "88"
+    equity_vs_random: 0.6856
+  - hand: "AKs"
+    equity_vs_random: 0.6701
+  - hand: "AQs"
+    equity_vs_random: 0.6596
+  - hand: "77"
+    equity_vs_random: 0.6569
+  - hand: "AKo"
+    equity_vs_random: 0.6525
+  - hand: "AJs"
+    equity_vs_random: 0.6496
+  - hand: "ATs"
+    equity_vs_random: 0.645
+  - hand: "AQo"
+    equity_vs_random: 0.6403
+  - hand: "66"
+    equity_vs_random: 0.6361
+  - hand: "KQs"
+    equity_vs_random: 0.6329
+  - hand: "AJo"
+    equity_vs_random: 0.6303
+  - hand: "ATo"
+    equity_vs_random: 0.6262
+  - hand: "A9s"
+    equity_vs_random: 0.625
+  - hand: "KJs"
+    equity_vs_random: 0.6192
+  - hand: "KTs"
+    equity_vs_random: 0.6186
+  - hand: "A8s"
+    equity_vs_random: 0.6186
+  - hand: "KQo"
+    equity_vs_random: 0.6156
+  - hand: "A7s"
+    equity_vs_random: 0.606
+  - hand: "A9o"
+    equity_vs_random: 0.605
+  - hand: "55"
+    equity_vs_random: 0.6048
+  - hand: "A5s"
+    equity_vs_random: 0.6004
+  - hand: "A6s"
+    equity_vs_random: 0.5997
+  - hand: "A8o"
+    equity_vs_random: 0.5995
+  - hand: "KJo"
+    equity_vs_random: 0.5995
+  - hand: "K9s"
+    equity_vs_random: 0.5967
+  - hand: "KTo"
+    equity_vs_random: 0.5964
+  - hand: "QJs"
+    equity_vs_random: 0.5936
+  - hand: "A4s"
+    equity_vs_random: 0.591
+  - hand: "QTs"
+    equity_vs_random: 0.5898
+  - hand: "A3s"
+    equity_vs_random: 0.5846
+  - hand: "A7o"
+    equity_vs_random: 0.5833
+  - hand: "K8s"
+    equity_vs_random: 0.5807
+  - hand: "A2s"
+    equity_vs_random: 0.5781
+  - hand: "A6o"
+    equity_vs_random: 0.5774
+  - hand: "A5o"
+    equity_vs_random: 0.5774
+  - hand: "K9o"
+    equity_vs_random: 0.5758
+  - hand: "44"
+    equity_vs_random: 0.575
+  - hand: "QJo"
+    equity_vs_random: 0.5737
+  - hand: "JTs"
+    equity_vs_random: 0.5713
+  - hand: "K7s"
+    equity_vs_random: 0.5686
+  - hand: "Q9s"
+    equity_vs_random: 0.5677
+  - hand: "K6s"
+    equity_vs_random: 0.5665
+  - hand: "QTo"
+    equity_vs_random: 0.5661
+  - hand: "A4o"
+    equity_vs_random: 0.5652
+  - hand: "A3o"
+    equity_vs_random: 0.5581
+  - hand: "K8o"
+    equity_vs_random: 0.5578
+  - hand: "A2o"
+    equity_vs_random: 0.5576
+  - hand: "K5s"
+    equity_vs_random: 0.5571
+  - hand: "Q8s"
+    equity_vs_random: 0.5527
+  - hand: "K4s"
+    equity_vs_random: 0.5512
+  - hand: "J9s"
+    equity_vs_random: 0.5471
+  - hand: "K7o"
+    equity_vs_random: 0.5468
+  - hand: "JTo"
+    equity_vs_random: 0.5463
+  - hand: "Q9o"
+    equity_vs_random: 0.5433
+  - hand: "K6o"
+    equity_vs_random: 0.5427
+  - hand: "33"
+    equity_vs_random: 0.5417
+  - hand: "K3s"
+    equity_vs_random: 0.5388
+  - hand: "J8s"
+    equity_vs_random: 0.5341
+  - hand: "Q7s"
+    equity_vs_random: 0.5329
+  - hand: "K5o"
+    equity_vs_random: 0.5324
+  - hand: "K2s"
+    equity_vs_random: 0.5321
+  - hand: "T9s"
+    equity_vs_random: 0.5317
+  - hand: "Q6s"
+    equity_vs_random: 0.5299
+  - hand: "Q8o"
+    equity_vs_random: 0.5267
+  - hand: "K4o"
+    equity_vs_random: 0.5245
+  - hand: "J9o"
+    equity_vs_random: 0.5244
+  - hand: "Q5s"
+    equity_vs_random: 0.5238
+  - hand: "Q4s"
+    equity_vs_random: 0.5184
+  - hand: "T8s"
+    equity_vs_random: 0.5165
+  - hand: "J7s"
+    equity_vs_random: 0.5155
+  - hand: "K3o"
+    equity_vs_random: 0.5123
+  - hand: "Q7o"
+    equity_vs_random: 0.5095
+  - hand: "Q3s"
+    equity_vs_random: 0.5087
+  - hand: "J8o"
+    equity_vs_random: 0.5079
+  - hand: "K2o"
+    equity_vs_random: 0.5068
+  - hand: "98s"
+    equity_vs_random: 0.5062
+  - hand: "22"
+    equity_vs_random: 0.5053
+  - hand: "T9o"
+    equity_vs_random: 0.5051
+  - hand: "Q6o"
+    equity_vs_random: 0.505
+  - hand: "J6s"
+    equity_vs_random: 0.5012
+  - hand: "Q2s"
+    equity_vs_random: 0.4993
+  - hand: "Q5o"
+    equity_vs_random: 0.4984
+  - hand: "T7s"
+    equity_vs_random: 0.4972
+  - hand: "J5s"
+    equity_vs_random: 0.4956
+  - hand: "Q4o"
+    equity_vs_random: 0.4921
+  - hand: "T8o"
+    equity_vs_random: 0.4884
+  - hand: "J7o"
+    equity_vs_random: 0.4882
+  - hand: "J4s"
+    equity_vs_random: 0.488
+  - hand: "Q3o"
+    equity_vs_random: 0.4833
+  - hand: "T6s"
+    equity_vs_random: 0.4803
+  - hand: "97s"
+    equity_vs_random: 0.4803
+  - hand: "98o"
+    equity_vs_random: 0.4779
+  - hand: "J3s"
+    equity_vs_random: 0.4752
+  - hand: "Q2o"
+    equity_vs_random: 0.4736
+  - hand: "87s"
+    equity_vs_random: 0.4732
+  - hand: "J6o"
+    equity_vs_random: 0.4731
+  - hand: "J5o"
+    equity_vs_random: 0.4688
+  - hand: "96s"
+    equity_vs_random: 0.4679
+  - hand: "T5s"
+    equity_vs_random: 0.4675
+  - hand: "J2s"
+    equity_vs_random: 0.4661
+  - hand: "T7o"
+    equity_vs_random: 0.4661
+  - hand: "J4o"
+    equity_vs_random: 0.4626
+  - hand: "86s"
+    equity_vs_random: 0.4607
+  - hand: "95s"
+    equity_vs_random: 0.458
+  - hand: "76s"
+    equity_vs_random: 0.4553
+  - hand: "T4s"
+    equity_vs_random: 0.4545
+  - hand: "T6o"
+    equity_vs_random: 0.4501
+  - hand: "97o"
+    equity_vs_random: 0.4499
+  - hand: "J3o"
+    equity_vs_random: 0.4491
+  - hand: "85s"
+    equity_vs_random: 0.4484
+  - hand: "T3s"
+    equity_vs_random: 0.4463
+  - hand: "75s"
+    equity_vs_random: 0.4421
+  - hand: "87o"
+    equity_vs_random: 0.4418
+  - hand: "J2o"
+    equity_vs_random: 0.4408
+  - hand: "T2s"
+    equity_vs_random: 0.4385
+  - hand: "94s"
+    equity_vs_random: 0.4373
+  - hand: "96o"
+    equity_vs_random: 0.4367
+  - hand: "65s"
+    equity_vs_random: 0.4358
+  - hand: "T5o"
+    equity_vs_random: 0.4356
+  - hand: "84s"
+    equity_vs_random: 0.4316
+  - hand: "86o"
+    equity_vs_random: 0.4279
+  - hand: "95o"
+    equity_vs_random: 0.4264
+  - hand: "93s"
+    equity_vs_random: 0.4262
+  - hand: "T4o"
+    equity_vs_random: 0.4256
+  - hand: "74s"
+    equity_vs_random: 0.4244
+  - hand: "76o"
+    equity_vs_random: 0.4234
+  - hand: "54s"
+    equity_vs_random: 0.4192
+  - hand: "T3o"
+    equity_vs_random: 0.4178
+  - hand: "85o"
+    equity_vs_random: 0.4163
+  - hand: "64s"
+    equity_vs_random: 0.416
+  - hand: "92s"
+    equity_vs_random: 0.4151
+  - hand: "T2o"
+    equity_vs_random: 0.4095
+  - hand: "75o"
+    equity_vs_random: 0.4087
+  - hand: "94o"
+    equity_vs_random: 0.4069
+  - hand: "83s"
+    equity_vs_random: 0.406
+  - hand: "65o"
+    equity_vs_random: 0.4024
+  - hand: "53s"
+    equity_vs_random: 0.4019
+  - hand: "73s"
+    equity_vs_random: 0.401
+  - hand: "84o"
+    equity_vs_random: 0.3996
+  - hand: "82s"
+    equity_vs_random: 0.3995
+  - hand: "63s"
+    equity_vs_random: 0.3961
+  - hand: "93o"
+    equity_vs_random: 0.3948
+  - hand: "74o"
+    equity_vs_random: 0.3913
+  - hand: "43s"
+    equity_vs_random: 0.3885
+  - hand: "64o"
+    equity_vs_random: 0.3863
+  - hand: "54o"
+    equity_vs_random: 0.3845
+  - hand: "92o"
+    equity_vs_random: 0.3836
+  - hand: "72s"
+    equity_vs_random: 0.3821
+  - hand: "62s"
+    equity_vs_random: 0.3789
+  - hand: "52s"
+    equity_vs_random: 0.3772
+  - hand: "83o"
+    equity_vs_random: 0.3735
+  - hand: "42s"
+    equity_vs_random: 0.3685
+  - hand: "73o"
+    equity_vs_random: 0.3674
+  - hand: "53o"
+    equity_vs_random: 0.3663
+  - hand: "82o"
+    equity_vs_random: 0.3653
+  - hand: "63o"
+    equity_vs_random: 0.3632
+  - hand: "32s"
+    equity_vs_random: 0.3583
+  - hand: "43o"
+    equity_vs_random: 0.3538
+  - hand: "72o"
+    equity_vs_random: 0.3467
+  - hand: "62o"
+    equity_vs_random: 0.3429
+  - hand: "52o"
+    equity_vs_random: 0.3424
+  - hand: "42o"
+    equity_vs_random: 0.3318
+  - hand: "32o"
+    equity_vs_random: 0.3203

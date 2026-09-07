@@ -264,47 +264,180 @@ each):
   the hero would bust or if a bust shrinks the table past the next hand's
   expected blind seats (dead-button rules are out of scope).
 
+## Follow-up PR: the residual, non-blocking findings
+
+PR #1's review (13 threads) flagged two things as genuinely blocking (both
+fixed before merge) and left a long tail of real findings explicitly marked
+non-blocking — either because the reviewer said so directly, or because
+they were architecture/feature-sized work the reviewer recommended
+splitting into a separate PR. This section is that PR: every one of those
+residual findings, addressed in one pass per the user's request ("adresse
+tous les points résiduels relevés mais non bloquants").
+
+**`pc brief` now covers preflop defense, not just RFI.** `ranges/table.py`'s
+`vs_rfi`/`vs_limp`/`squeeze`/`vs_3bet`/`vs_4bet` existed and were unit-tested
+in isolation but were never called from anywhere — every defending decision
+(facing an open/limp/3bet/4bet) fell through to G5 (full analysis, no
+tabulated verdict). Two things were needed to wire them in for real:
+- **A way to test "is hero's hand in this range?"** — the derived scenarios
+  only ever produced a percentage + prose (`"~23.5% (top range du héros,
+  largeur approximée)"`), not a parseable range, so there was nothing to
+  check hand-membership against. Fixed by adding
+  [`data/hand-strength-ranking.yaml`](data/hand-strength-ranking.yaml) — the
+  169 starting hand types ranked by raw equity vs. a fully random range,
+  computed once via the existing equity engine (Monte Carlo, ~40s,
+  deterministic seed) and frozen as static data — and
+  `ranges.table.top_pct_range(pct)`, which cumulates COMBOS (not types: 6
+  per pair, 4 per suited, 12 per offsuit) down that ranking until it covers
+  `pct`% of the 1326 total combos, producing a real `equity.parse_range`-
+  compatible string. `vs_rfi`/`vs_limp`/`squeeze`/`vs_3bet`/`vs_4bet` now
+  populate `.range` with this instead of prose.
+- **Scenario selection logic in `brief.py`'s G1 preflop branch** —
+  `_defend_scenario_entry()` picks the closest derived scenario to what
+  hero is actually facing from `pot_type` and the action history: `limp` →
+  `vs_limp`, a single raise → `vs_rfi` (or `squeeze` if there's already a
+  call behind the raiser — a squeeze opportunity for hero, which `pot_type`
+  alone can't distinguish from a plain heads-up defend), `three_bet_pot`/
+  `squeeze` (facing one) → `vs_3bet` (no dedicated "vs a squeeze" formula
+  exists, so this is a documented approximation), `four_bet_pot` →
+  `vs_4bet`. Also added `pc ranges --hand hand.json --scenario {rfi,vs_rfi,
+  vs_limp,squeeze,vs_3bet,vs_4bet} [--seat N] [--opener-seat N]` for a
+  standalone lookup independent of any specific hero hand.
+  `top_pct_range()` only produces a contiguous top-X% slice by raw
+  strength, though — `squeeze`'s real-poker meaning (a polarized value+bluff
+  mix, not a strength interval) isn't actually representable this way; the
+  scenario's `.range` is honest about being an approximation of that, not a
+  real polarized range.
+
+**G2's confidence, and a disagreement flag instead of a silent contradiction.**
+G2's budget-exhausted fallback (facing a bet, ATT/DEF ran out) rendered
+`confidence: "forced"` — the same certainty as a deterministic G0/G1
+lookup — even though it's a tabulated heuristic a genuinely calculated G3
+equity CAN contradict (the reviewer's reproduction: this fallback said
+`fold` on a spot where equity was 52-64% against a 30% threshold). Fixed in
+two parts:
+- `gates.g2_budget_decisive`'s facing-a-bet fallback now renders
+  `confidence: "strong"`, not `"forced"` — honest about its epistemic
+  status without changing verbosity or forcing an extra G3 computation on
+  every close (which would defeat the point of the gate cascade). The
+  "check" fallback (nothing to call) stays `"forced"`, correctly: without a
+  bet to call there's no pot-odds threshold, so G3 can never even run there
+  to contradict it.
+- When `--depth full` computes G3 anyway (already existing behavior — the
+  verdict is never recalculated, only detailed) and it leans the opposite
+  way from what already closed the decision, `pc brief` now surfaces
+  `out["gate_disagreement"]` (`closing_gate`, `closing_verdict`,
+  `g3_verdict`, a human-readable note) instead of leaving the contradiction
+  only visible by manually diffing two JSON fields. The closing gate's
+  verdict is still never overridden.
+
+**`ranges/narrow.py` gets a bluff-retention floor.** Binary keep/drop
+filtering (`action in b.viable_actions`) made villain ranges collapse to
+"100% value, 0% bluffs" once accumulated pressure exhausted every weak
+class's ATT budget — a 3-barrel river spot the reviewer measured had both
+`vs_range_wide` and `vs_range_narrow` narrow down to sets/two-pair only,
+producing G3 equity bounds of exactly `[0.0, 0.0]`: not a measurement, an
+artefact (verified fixed: same spot now gives real bounds, e.g. `[0.40,
+0.48]` on a moderate case, `[0.07, 0.13]` on a much heavier-pressure one —
+never `[0.0, 0.0]`). Fixed with `MIN_BLUFF_FLOOR_WEIGHT` (0.08, **not**
+calibrated against real data — a deliberately modest, round placeholder):
+a combo whose budget is exhausted *by pressure* is now retained at that
+floor weight instead of dropped, encoded in the output range string via
+the already-supported `combo@xx%` notation so the reduced weight actually
+propagates to downstream equity calculations. Combos cut by a *structural*
+rule (`bluff_dies_multiway`, `bluff_multi_street_blocked` — "this line
+makes no sense", not "the budget ran dry") are carefully excluded from the
+floor and stay a hard zero, verified by a dedicated test — otherwise the
+fix would have silently walked back those gates' own deliberate rulings.
+The other, distinct cause the reviewer identified — the base viability
+criterion being too loose at *fresh* budget (a `trash`-classified combo
+still has nonzero base ATT, so ~97% of combos survive a flop `call` in one
+measurement) — is **not** fixed here: it's a calibration question about
+`data/att-def-budgets.yaml`'s base thresholds, not a mechanism gap, and
+this project's standing policy is not to retune those numbers without real
+session data. Documented in both the module docstring and here so it isn't
+lost.
+
+**The outs over-count on already-made hands (round 3 of that fix).** The
+round-2 neutral-hand comparison correctly filtered pure board-pairing cards
+for hands with no pair yet, but still over-counted them once hero already
+holds a made pair-family hand: hero's *pre-existing* pair mechanically
+carries through the "beats a neutral hand" comparison even when the card
+isn't a hero-specific edge (a 7 on `K♥7♣2♦` gives a `K♦Q♠` hero `KK77`, Two
+Pair, which does beat a neutral hand's mere `Pair(7)` — but gives that same
+Two Pair to literally any other King holder too, since the improvement
+comes entirely from pairing the board's own existing card). An initial
+attempt at comparing to a "same class, different kicker" reference hand
+turned out to over-correct — it also excluded the *last remaining King*,
+even though tripping up on hero's own hole card is a genuinely
+hero-specific improvement regardless of kicker. The actual fix is simpler:
+once hero already has a made pair, exclude a candidate only if it pairs an
+*existing board rank that doesn't touch either of hero's hole cards* —
+letting through anything that pairs one of his own cards. Verified against
+the reviewer's own worked example: `K♦Q♠`/`K♥7♣2♦` now gives exactly 5 outs
+(3 Qs + 2 Ks), matching their manual count precisely; the other three
+reference hands from the review (15, 14, 6) are unaffected, since none of
+them have a made pair yet at the point of counting.
+
+**Everything else from the review's "noted, not commented inline"
+list** — all fixed:
+- `state.py`: `validate_and_load` now cross-checks a seat's declared
+  `status` against its own action history (a seat that folded/shoved
+  somewhere in the record must be `"folded"`/`"allin"`, not left
+  `"active"` — this was silently breaking
+  `players_active`/`n_defenders`/`effective_stack`/`mdf_individual`), and
+  rejects a street-sequence gap (`flop: null` followed by `turn: {...}`).
+- `actionline.replay_pressure`: `still_in`/`folded_or_out` used to reset
+  every street, forgetting earlier folds — a seat folded preflop kept
+  accumulating `faced` pressure for flop/turn/river bets it was no longer
+  exposed to. Now tracked cumulatively across the whole replay.
+- `brief.py`: `hero_seat` and `to_act` were read inconsistently (preflop
+  read `to_act`'s cards, postflop read `hero_seat`'s, pressure always
+  `to_act`'s) — `pc brief`/`pc budget` now both require `to_act ==
+  hero_seat` up front (a clear error otherwise) and use `hero_seat`
+  throughout; the now-provably-dead `hero_is_allin` branch in
+  `g0_forced()`'s call site is kept but pinned to `False` with a comment
+  explaining why, rather than silently removed.
+- `cli.cmd_narrow` passed the *hero's* replayed pressure into `narrow()`
+  when `--action` describes a *villain's* action — fixed by adding
+  `actionline.most_relevant_villain_seat()` (shared with `pc brief`'s own
+  villain-seat selection for G3) and a `--seat` override.
+- `state.ARCHETYPES` was missing `"calling_station"`, even though
+  `budget.py` and `--villain-archetype` on `pc budget`/`pc brief` already
+  treat it as a real archetype — added; `pc narrow --villain-archetype`
+  also gained the `choices=` validation the other subcommands already had.
+- `equity._range_between`: inverted bounds (`"77-22"`, `"98s-JTs"`) used to
+  return an empty combo list with no error — now raises a clear
+  `ValueError`.
+- `data/preflop-rfi.yaml`: the HU BTN/SB row's comment claimed 11 excluded
+  offsuit combos; the range notation (`74o+` fans from 4 up to 6, so it
+  excludes both `72o` *and* `73o`) actually excludes 12 — `73o` was
+  missing from the documented list. Comment corrected; verified
+  programmatically against the full 78-type offsuit set.
+- `tests/test_live_session_scripts.py` only ever loaded the session
+  scripts via `importlib.spec_from_file_location`, so the suite never
+  exercised the invocation `SKILL.md` actually documents (`python3
+  skills/live-session/scripts/advance_street.py ...`, a real subprocess,
+  which depends on `pokercoach` actually being `pip install -e .`'d) —
+  added a subprocess-based test for that exact invocation.
+- `budget.py`'s `two_pair` lookup indexed its YAML `priority_matrix`
+  positionally (`matrix[0]`...`matrix[5]`) — reordering the YAML would've
+  silently changed which row a given board/hand matched. Each row already
+  carried a `when: [...]` tag describing its own condition; added
+  `_row_by_when()` to look up by that content instead of list position
+  (verified: reversing the YAML list gives identical results before/after,
+  and breaks the old positional code outright).
+
 Still open:
 - 7/8-max range precision if the parameterized generalization proves too
   imprecise in practice (unchanged — no real usage to calibrate against yet).
-- `pc brief` doesn't cover preflop *defense* (vs an open/limp/3bet/4bet) —
-  only RFI (G1) is wired in. `ranges/table.py`'s `vs_rfi`/`vs_limp`/
-  `squeeze`/`vs_3bet`/`vs_4bet` entries exist and are tested in isolation
-  but aren't called from anywhere: every defending decision falls through
-  to G5 (full analysis, no tabulated verdict) instead of using them.
-  Flagged by automated PR review; deliberately not fixed inline here —
-  wiring five more branches into G1 plus a `pc ranges` subcommand is a
-  feature addition, not a local bug fix.
-- G2 (the ATT/DEF budget heuristic) can render a `confidence: "forced"`
-  verdict (typically a fold on an exhausted DEF budget) that a G3 equity
-  calculation, if run, would contradict — the cascade currently lets the
-  cheaper heuristic close the decision before the more expensive
-  calculation ever runs, with no cross-check between the two. Flagged by
-  automated PR review, and by the reviewer's own read it's a gate-ordering
-  *architecture* question (does G2's "budget exhausted" fold escalate to
-  G3 instead of forcing, or does it force but flag disagreement when G3
-  is calculable) — worth its own PR rather than a change bundled in here.
-  On re-review after the narrowing fix below, the reviewer's own
-  reproduction stopped demonstrating a contradiction — but only because
-  G3's bounds collapsed to `[0.0, 0.0]` on that spot (see next item), not
-  because the gates now agree for a good reason. Tackle this one *after*
-  the range-model item below, not before: a G3 that always says "fold"
-  can't meaningfully contradict G2 either way.
-- `ranges/narrow.py`'s per-street filtering (`action in b.viable_actions`)
-  has no way to represent a plausible bluff — as pressure accumulates
-  across streets, only the strongest hand classes keep a nonzero ATT/DEF
-  budget, so a villain range narrowed through a few streets of betting
-  converges toward "100% value, 0% bluffs" (verified: a 3-barrel river
-  spot narrowed to 100% sets/two-pair, both wide and narrow seeds,
-  producing degenerate G3 bounds of exactly `[0.0, 0.0]`). Flagged by
-  automated PR review. Combined with the already-known "criterion too
-  loose" issue (a `trash`-classified combo still has nonzero base ATT, so
-  early-street narrowing barely filters anything — 97.6% of combos
-  retained on a `call` in one measurement), the practical conclusion is
-  that G3's equity bounds shouldn't be treated as a reliable signal today,
-  on any street. Needs an explicit bluff-retention mechanism (e.g. a floor
-  on weak combos under high pressure, or weighting instead of a binary
-  keep/drop), which is a range-model design question, not a wiring fix.
+- `ranges/narrow.py`'s base viability criterion being too loose at fresh
+  budget (see above) — a calibration question, needs real session data.
+- `data/hand-strength-ranking.yaml`'s ranking is raw equity vs. a fully
+  random range — it ignores position, table format, and postflop
+  playability (a suited connector can be worth more than its raw equity
+  suggests). Fine as the basis for `top_pct_range()`'s approximate slicing,
+  not a substitute for real range construction.
 
 ## Repo layout
 
