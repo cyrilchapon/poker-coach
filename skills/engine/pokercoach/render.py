@@ -14,15 +14,25 @@ la v1 et ne doit pas être perdu") :
 - case vide (pas de "...") si le siège n'a pas encore agi ;
 - board + pot centrés à l'intérieur, largeur du rectangle invariante (jamais
   de dépassement qui décale le bord) ;
-- le Héros est toujours affiché en bas.
+- le Héros est toujours affiché en bas ;
+- sièges "horizontaux" (Héros en bas, éventuellement un siège en haut) :
+  ligne combinée centrée à l'intérieur/extérieur ;
+- sièges "verticaux" (colonnes gauche/droite, de part et d'autre du
+  rectangle) : identité puis stack (2 lignes) dehors, action puis montant
+  (2 lignes séparées) dedans, alignées du côté du joueur.
 
-Simplification assumée pour la généralisation à N sièges (2 à 8) : la v1
-plaçait les 5 non-Héros aux 4 coins + le haut d'une géométrie fixe à 6
-sièges. Cette géométrie fixe ne généralise pas proprement à un nombre
-variable de sièges ; ici, les sièges non-Héros sont listés à l'extérieur du
-rectangle, dans l'ordre de parole réel (clockwise depuis la gauche du
-Héros), au-dessus de la boîte. Les conventions listées ci-dessus sont
-préservées à l'identique ; seule la disposition géométrique change.
+Généralisation à N sièges (2 à 8) de la géométrie fixe 6-max de la v1 (4
+coins + 1 haut) : les sièges non-Héros, dans l'ordre de parole réel
+(clockwise depuis la gauche du Héros), sont répartis en :
+
+- un siège "top" (horizontal, au-dessus du rectangle) SEULEMENT si le
+  nombre de sièges non-Héros est impair (le siège du milieu de la liste) ;
+- le reste, à parts égales, dans une colonne gauche et une colonne droite,
+  disposées verticalement de part et d'autre du rectangle — la colonne
+  gauche prend les sièges les plus proches du Héros (bas -> haut), la
+  colonne droite prend les sièges les plus proches du haut (haut -> bas) ;
+  ce qui reproduit exactement le placement 4-coins + top de la v1 quand il
+  y a 5 sièges non-Héros (6-max).
 """
 from __future__ import annotations
 
@@ -32,6 +42,7 @@ BB_UNIT = "𝄫"
 INNER = 22
 BOX_W = INNER + 2
 SIDE_W = 16
+HALF = INNER // 2
 TOTAL_W = SIDE_W * 2 + BOX_W
 
 
@@ -49,6 +60,26 @@ def _l(text: str, width: int) -> str:
     return str(text)[:width].ljust(width)
 
 
+def _r(text: str, width: int) -> str:
+    return str(text)[:width].rjust(width)
+
+
+def _split_layout(order: list[str]) -> tuple[list[str], str | None, list[str]]:
+    """Répartit ``order`` (clockwise depuis la gauche du Héros) en
+    (colonne_gauche bas->haut, siège_top ou None, colonne_droite haut->bas)."""
+    n = len(order)
+    if n % 2 == 1:
+        top_seats = 1
+    else:
+        top_seats = 0
+    side_total = n - top_seats
+    left_count = side_total // 2
+    left_labels = order[:left_count]
+    top_label = order[left_count] if top_seats else None
+    right_labels = order[left_count + top_seats:]
+    return left_labels, top_label, right_labels
+
+
 def render(*, seats: dict[str, dict], hero_position: str, hero: dict, board: list[str],
            pot: float, street: str = "", acting_order: list[str] | None = None) -> str:
     """``seats``: {position_label -> {stack, action, amount, cards?, archetype?}}
@@ -60,27 +91,69 @@ def render(*, seats: dict[str, dict], hero_position: str, hero: dict, board: lis
     if missing:
         raise ValueError(f"render: sièges absents du dict seats: {missing}")
 
+    def s(pos: str | None, key: str, default: Any = "") -> Any:
+        if pos is None:
+            return default
+        return seats[pos].get(key, default)
+
+    def label(pos: str | None) -> str:
+        if pos is None:
+            return ""
+        if s(pos, "archetype"):
+            return f"{pos}({s(pos, 'archetype')[:3].lower()})"
+        return pos
+
+    left_labels, top_label, right_labels = _split_layout(order)
+    left_col = list(reversed(left_labels))  # rendu haut -> bas
+    right_col = right_labels                # déjà haut -> bas
+
     lines: list[str] = []
     if street:
         lines.append(_c(f"── {street} ──", TOTAL_W))
     lines.append("")
 
-    for pos in order:
-        s = seats[pos]
-        cards = s.get("cards")
-        if cards:
-            lines.append(_c(" ".join(cards), TOTAL_W))
-        label = pos
-        if s.get("archetype"):
-            label = f"{pos}({s['archetype'][:3].lower()})"
-        lines.append(_c(f"{label} · {bb(s.get('stack', ''))}", TOTAL_W))
-        action, amount = s.get("action", ""), s.get("amount")
+    if top_label:
+        if s(top_label, "cards"):
+            lines.append(_c(" ".join(s(top_label, "cards")), TOTAL_W))
+        lines.append(_c(f"{label(top_label)} · {bb(s(top_label, 'stack', ''))}", TOTAL_W))
+        action, amount = s(top_label, "action", ""), s(top_label, "amount")
         content = f"{action} · {bb(amount)}" if action and amount else (action or "")
         lines.append(_c(content, TOTAL_W))
         lines.append("")
 
-    board_cells = (board + ["--"] * 5)[:5]
     lines.append(" " * SIDE_W + "╭" + "─" * INNER + "╮")
+
+    def vertical_row(pos_l: str | None, pos_r: str | None) -> list[str]:
+        left_label = _r(label(pos_l), SIDE_W - 1) + " │"
+        right_label = "│ " + label(pos_r)
+        act_l = _l(s(pos_l, "action", ""), HALF)
+        act_r = _r(s(pos_r, "action", ""), HALF)
+        row1 = left_label + act_l + act_r + right_label
+
+        left_stack = _r(bb(s(pos_l, "stack", "")), SIDE_W - 1) + " │"
+        right_stack = "│ " + bb(s(pos_r, "stack", ""))
+        amt_l = _l(bb(s(pos_l, "amount")), HALF)
+        amt_r = _r(bb(s(pos_r, "amount")), HALF)
+        row2 = left_stack + amt_l + amt_r + right_stack
+
+        rows = [row1, row2]
+        cards_l, cards_r = s(pos_l, "cards"), s(pos_r, "cards")
+        if cards_l or cards_r:
+            l_c = " ".join(cards_l or [])
+            r_c = " ".join(cards_r or [])
+            left_cards = _r(l_c, SIDE_W - 1) + " │"
+            right_cards = "│ " + r_c
+            rows.append(left_cards + " " * INNER + right_cards)
+        return rows
+
+    max_rows = max(len(left_col), len(right_col))
+    for i in range(max_rows):
+        pos_l = left_col[i] if i < len(left_col) else None
+        pos_r = right_col[i] if i < len(right_col) else None
+        lines.extend(vertical_row(pos_l, pos_r))
+        lines.append(" " * SIDE_W + "│" + " " * INNER + "│")
+
+    board_cells = (board + ["--"] * 5)[:5]
     lines.append(" " * SIDE_W + "│" + _c(" ".join(board_cells), INNER) + "│")
     lines.append(" " * SIDE_W + "│" + _c(f"pot · {bb(pot)}", INNER) + "│")
     hero_action, hero_amount = hero.get("action", "?"), hero.get("amount")
