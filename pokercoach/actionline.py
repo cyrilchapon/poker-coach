@@ -57,10 +57,20 @@ def pot_type(state: HandState) -> str:
     return "four_bet_pot"
 
 
+def is_opening_decision(state: HandState) -> bool:
+    """True si personne n'a encore volontairement ouvert le pot (call/raise)
+    sur la rue préflop — la BB forcée gonfle ``to_call`` avant toute action
+    volontaire, ce qui ne fait de personne un "défenseur" au sens de
+    ``role()``. Utilisé aussi par ``brief.py`` pour le lookup RFI."""
+    if state.street != "preflop":
+        return False
+    return not any(a["action"] in ("call", "raise") for a in state.streets["preflop"]["actions"])
+
+
 def role(state: HandState, *, seat: int | None = None) -> str:
     seat = state.to_act if seat is None else seat
     from .state import to_call
-    if to_call(state, seat=seat) > 0:
+    if to_call(state, seat=seat) > 0 and not is_opening_decision(state):
         return "defender"
     return "aggressor" if last_aggressor(state) == seat else "probe"
 

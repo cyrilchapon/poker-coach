@@ -85,3 +85,19 @@ def test_narrow_fold_keeps_everything():
     board = parse_cards(["9♦", "6♣", "2♥"])
     result = narrow.narrow("22+", board, "fold", pot_type="srp", street="flop")
     assert result.remaining_combos == result.original_combos
+
+
+def test_narrow_check_keeps_everything():
+    # Regression: "check" used to be mapped onto the same "call" bucket as
+    # a real call (gated by DEF), when checking is free and shouldn't be
+    # filtered by budget at all.
+    board = parse_cards(["9♦", "6♣", "2♥"])
+    result = narrow.narrow("22+,72o", board, "check", pot_type="srp", street="flop")
+    assert result.remaining_combos == result.original_combos
+
+
+def test_narrow_bet_removes_combos_that_cannot_fund_a_bet():
+    board = parse_cards(["9♦", "6♣", "2♥"])
+    result = narrow.narrow("QQ+,72o", board, "bet", pot_type="srp", street="flop",
+                            pressure_spent=1.0)
+    assert result.remaining_combos < result.original_combos

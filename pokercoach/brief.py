@@ -64,13 +64,10 @@ def compute(raw: dict[str, Any], *, villain_archetype: str | None = None,
             verdict_if_in_range = "raise_or_call"
             range_json = None
             # Décision d'ouverture (RFI) : personne n'a encore volontairement
-            # ouvert le pot (call/raise) — ni `role` (qui lit `to_call`, gonflé
-            # par la blind forcée de la BB) ni `pot_type` seuls ne suffisent à
-            # distinguer "je suis le premier à parler" de "je défends déjà".
-            preflop_actions = state.streets["preflop"]["actions"]
-            is_opening_decision = pot_type == "srp" and not any(
-                a["action"] in ("call", "raise") for a in preflop_actions)
-            if is_opening_decision:
+            # ouvert le pot (call/raise) — cf. actionline.is_opening_decision,
+            # dont dépend aussi `role` désormais (il ne lit plus le `to_call`
+            # gonflé par la blind forcée de la BB comme un "je défends").
+            if pot_type == "srp" and actionline.is_opening_decision(state):
                 entry = range_table.rfi(key)
                 range_json = entry.to_json()
                 hero_cards = state.seats[to_act].cards
@@ -113,22 +110,24 @@ def compute(raw: dict[str, Any], *, villain_archetype: str | None = None,
     out["texture"] = texture.to_json()
 
     n_opponents_active = max(0, d.players_active - 1)
+    facing_bet = d.to_call > 0
     replay = actionline.replay_pressure(state)
     b = budget_mod.compute(
         hc, texture, pot_type=pot_type, street=state.street,
         n_opponents_active=n_opponents_active,
         pressure_spent=replay.spent.get(to_act, 0.0),
         pressure_faced=replay.faced.get(to_act, 0.0),
-        villain_archetype=villain_archetype,
+        villain_archetype=villain_archetype, facing_bet=facing_bet,
     )
     out["budget"] = b.to_json()
     if villain_archetype:
         out["exploit"] = {"archetype": villain_archetype,
                            "flags": [n for n in b.notes if n.startswith("G4")]}
 
-    envisaged = "call" if d.to_call > 0 else "raise"
+    envisaged = "call" if facing_bet else "bet"
     if decision is None:
-        decision = gates.g2_budget_exhausted(envisaged_action=envisaged, viable_actions=b.viable_actions)
+        decision = gates.g2_budget_decisive(envisaged_action=envisaged, viable_actions=b.viable_actions,
+                                             att_remaining=b.att_remaining, facing_bet=facing_bet)
     if decision is None:
         decision = gates.g4_exploit(exploit_notes=b.notes)
 

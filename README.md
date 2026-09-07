@@ -93,6 +93,51 @@ for realistic opening decisions at every position, not just the SB. Both
 are covered by regression tests now (`tests/test_equity.py`,
 `tests/test_actionline.py`, `tests/test_brief.py`).
 
+**Played an actual end-to-end session** (6-max, mode 3, real `pc`/script
+calls the way `live-session` would make them — not just `pytest`) to check
+this all genuinely works together, per the user's request. Found and fixed
+three more real bugs this way, none of them caught by the 116 tests passing
+at the time — the gap in every case was a code path no test happened to
+exercise, not a subtle edge case:
+- `budget.compute()` always offered `call`/`fold` regardless of whether
+  there was an actual bet to call — a weak hand facing a free check got
+  told to "call" (gated by DEF) instead of "check" (always free), and the
+  fallback that logic fed into `pc brief`'s G2 gate could return `"call"`
+  as a verdict for a check/bet decision. Fixed by threading a `facing_bet`
+  flag through `budget.compute()`, `gates.g2_budget_decisive()` (renamed
+  from `g2_budget_exhausted`) and `ranges.narrow.narrow()` — the action
+  vocabulary is now genuinely `bet`/`check` when nothing's being faced,
+  `raise`/`call`/`fold` when something is.
+- `actionline.role()`'s fix from the previous round was incomplete: `pc
+  brief`'s G1 gate had been patched locally to stop misreading an opening
+  decision as "defending", but `line.role` itself — the field a coach
+  would actually narrate from — still said `"defender"`. Fixed at the
+  source (`actionline.role()` now defers to the same
+  `is_opening_decision()` check), and `brief.py`'s local workaround
+  removed now that it's no longer needed.
+- `state.derive()`'s `pot_odds`/`mdf_collective` computed to `0.0`/`1.0`
+  instead of `None` whenever `to_call == 0` but the pot already had
+  chips in it (the guard was "pot + call > 0", true on almost every
+  street) — a meaningful-*looking* number for a question that doesn't
+  apply ("equity needed for a profitable call" when there's nothing to
+  call). That fed a live, visible bug: a made hand with unlimited budget
+  and no bet facing it got compared against a fabricated `threshold: 0.0`
+  in G3 and came back `verdict: "call_or_raise"`, an answer that doesn't
+  even make sense for a check/bet decision. Fixing the root cause exposed
+  a real gap in the gate cascade itself, not just the number: with
+  `pot_odds` correctly `None`, G3 could no longer fire on that decision,
+  and nothing else closed it either — a textbook "you have the near-nuts,
+  just bet" spot was falling through to G5 (the most expensive, full-analysis
+  tier) instead of a one-line forced verdict. `g2_budget_decisive` now
+  also closes the decision early when budget is unambiguously abundant
+  (`att_remaining == inf`, not facing a bet), symmetric to how it already
+  closed it when budget was exhausted.
+
+All three covered by regression tests (`tests/test_budget.py`,
+`tests/test_ranges.py`, `tests/test_actionline.py`, `tests/test_brief.py`),
+plus a full hand played start to finish through the real CLI/scripts as a
+manual check, in addition to the automated suite.
+
 **Session/multi-hand tooling** is now built, per the direction agreed with
 the user: `pokercoach`'s CLI commands stay unitary and standalone (each one
 takes a `hand.json`, does one job, and knows nothing about "a session") so

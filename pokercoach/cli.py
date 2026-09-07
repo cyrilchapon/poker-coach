@@ -87,7 +87,7 @@ def cmd_budget(args: argparse.Namespace) -> dict[str, Any]:
         n_opponents_active=max(0, d.players_active - 1),
         pressure_spent=replay.spent.get(state.to_act, 0.0),
         pressure_faced=replay.faced.get(state.to_act, 0.0),
-        villain_archetype=args.villain_archetype,
+        villain_archetype=args.villain_archetype, facing_bet=d.to_call > 0,
     )
     return b.to_json()
 

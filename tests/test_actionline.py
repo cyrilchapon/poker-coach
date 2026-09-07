@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from pokercoach.actionline import last_aggressor, pot_type, pressure_weight, replay_pressure, role
+from pokercoach.actionline import is_opening_decision, last_aggressor, pot_type, pressure_weight, replay_pressure, role
 from pokercoach.state import validate_and_load
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -57,6 +57,24 @@ def test_role_aggressor_and_probe_when_not_facing_a_bet():
     assert last_aggressor(state) == 0  # seat 0 raised preflop
     assert role(state, seat=0) == "aggressor"
     assert role(state, seat=1) == "probe"
+
+
+def test_role_is_not_defender_on_the_very_first_preflop_decision():
+    # Regression: to_call() is inflated by the BB's forced post before
+    # anyone has voluntarily acted -- role() used to read "defender" for
+    # literally anyone's opening decision (blinds-only preflop state).
+    raw = load_fixture("hu_flop_cbet.json")
+    raw = dict(raw)
+    raw["streets"] = dict(raw["streets"])
+    raw["streets"]["preflop"] = {"actions": [
+        {"seat": 0, "action": "post", "amount": 0.5},
+        {"seat": 1, "action": "post", "amount": 1.0},
+    ]}
+    raw["streets"]["flop"] = None
+    raw["to_act"] = 0
+    state = validate_and_load(raw)
+    assert is_opening_decision(state) is True
+    assert role(state) != "defender"
 
 
 def test_pot_type_limp_srp_3bet_squeeze_4bet():

@@ -449,8 +449,15 @@ def derive(state: HandState) -> DerivedState:
     p = pot(state)
     call = to_call(state)
     denom = p + call
-    pot_odds = call / denom if denom > 0 else None
-    mdf_collective = p / denom if denom > 0 else None
+    # Les deux ne sont définis QUE s'il y a une vraie mise à suivre (call > 0)
+    # — pas seulement un pot non nul. Bug corrigé : avec l'ancienne garde
+    # (denom > 0), to_call == 0 donnait pot_odds = 0.0 et mdf = 1.0 au lieu
+    # de None dès que le pot était non nul (systématique dès la 2e rue) —
+    # des valeurs numériques trompeuses pour "il n'y a rien à comparer", qui
+    # ont fait passer une décision check/bet par la logique de bornes
+    # d'équité de G3 (pc brief) comme si un seuil de rentabilité existait.
+    pot_odds = call / denom if call > 0 else None
+    mdf_collective = p / denom if call > 0 else None
     n_def = n_defenders(state)
     mdf_individual = (
         1 - (1 - mdf_collective) ** (1 / n_def)

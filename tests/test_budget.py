@@ -11,6 +11,30 @@ def hc_and_texture(hole, board):
     return classify(hole_c, board_c), classify_texture(board_c)
 
 
+def test_not_facing_a_bet_offers_check_bet_not_call_fold():
+    # Regression: budget.compute() used to always offer call/fold regardless
+    # of whether there was actually a bet to call -- an underpair with no
+    # ATT budget got told "call" was viable (gated by DEF, which doesn't
+    # apply when checking is free) instead of "check".
+    hc, tex = hc_and_texture(["8♠", "8♥"], ["K♦", "7♣", "2♥"])  # underpair, weak_showdown
+    b = compute(hc, tex, pot_type="srp", street="flop", n_opponents_active=2,
+                pressure_spent=0.0, pressure_faced=0.0, facing_bet=False)
+    assert b.viable_actions == ["check"]
+    assert b.removed == [{"action": "bet", "reason": "budget ATT insuffisant (0.0 <= 0)"}]
+    assert "call" not in b.viable_actions and "fold" not in b.viable_actions
+
+
+def test_facing_a_bet_still_offers_the_original_call_raise_fold_triple():
+    hc, tex = hc_and_texture(["A♠", "9♥"], ["9♦", "6♣", "2♥"])  # top pair, strong ATT/DEF
+    b = compute(hc, tex, pot_type="srp", street="flop", n_opponents_active=1,
+                pressure_spent=0.0, pressure_faced=0.0, facing_bet=True)
+    assert "raise" in b.viable_actions
+    assert "call" in b.viable_actions
+    assert "fold" in b.viable_actions
+    assert "check" not in b.viable_actions
+    assert "bet" not in b.viable_actions
+
+
 def test_nuts_are_unlimited():
     hc, tex = hc_and_texture(["K♠", "K♥"], ["K♦", "K♣", "2♥"])
     b = compute(hc, tex, pot_type="srp", street="flop", n_opponents_active=1,

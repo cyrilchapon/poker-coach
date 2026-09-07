@@ -325,7 +325,13 @@ STREET_INDEX = {"preflop": 0, "flop": 1, "turn": 2, "river": 3}
 
 def compute(hc: HandClass, texture: Texture, *, pot_type: str, street: str,
             n_opponents_active: int, pressure_spent: float, pressure_faced: float,
-            villain_archetype: str | None = None) -> Budget:
+            villain_archetype: str | None = None, facing_bet: bool = True) -> Budget:
+    """``facing_bet`` distingue les deux binômes d'options réels : face à une
+    mise, c'est raise/call/fold (DEF gate le call) ; sans mise à suivre,
+    c'est bet/check/fold — le check est TOUJOURS gratuit et viable, ce n'est
+    plus DEF qui le gate (bug corrigé : avant, "call" restait proposé même
+    à to_call == 0, et le fallback de la gate G2 pouvait rendre "call" sur
+    une décision de check/bet)."""
     att_base, def_base = _base_made_hands(hc, pot_type, texture)
     draw_att, combo_bonus_def = _base_draw(hc)
 
@@ -347,17 +353,23 @@ def compute(hc: HandClass, texture: Texture, *, pot_type: str, street: str,
     att_remaining = INF if att == INF else max(0.0, att - pressure_spent)
     def_remaining = INF if deff == INF else max(0.0, deff - pressure_faced)
 
+    aggressive_label = "raise" if facing_bet else "bet"
+
     viable = []
     removed = list(mw_removed) + list(exploit_removed)
     if att_remaining > 0:
-        viable.append("raise")
+        viable.append(aggressive_label)
     else:
-        removed.append({"action": "raise", "reason": f"budget ATT insuffisant ({round(att_remaining, 2)} <= 0)"})
-    if def_remaining > 0:
-        viable.append("call")
+        removed.append({"action": aggressive_label,
+                         "reason": f"budget ATT insuffisant ({round(att_remaining, 2)} <= 0)"})
+    if facing_bet:
+        if def_remaining > 0:
+            viable.append("call")
+        else:
+            removed.append({"action": "call", "reason": f"budget DEF insuffisant ({round(def_remaining, 2)} <= 0)"})
+        viable.append("fold")
     else:
-        removed.append({"action": "call", "reason": f"budget DEF insuffisant ({round(def_remaining, 2)} <= 0)"})
-    viable.append("fold")
+        viable.append("check")  # toujours gratuit, jamais gaté par DEF
 
     return Budget(
         att_base=att_base, def_base=def_base,

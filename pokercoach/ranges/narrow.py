@@ -14,11 +14,9 @@ from ..equity import WeightedCombo, parse_range
 from ..handclass import classify
 from ..texture import classify as classify_texture
 
-ACTION_TO_VIABLE = {
-    "raise": "raise", "bet": "raise",
-    "call": "call", "check": "call",
-    "fold": "fold",
-}
+FACING_BET_ACTIONS = ("call", "raise")     # une mise existe déjà, l'adversaire y répond
+NOT_FACING_BET_ACTIONS = ("check", "bet")  # rien à suivre, l'adversaire ouvre l'action
+ALL_ACTIONS = FACING_BET_ACTIONS + NOT_FACING_BET_ACTIONS + ("fold",)
 
 
 @dataclass
@@ -42,9 +40,15 @@ class NarrowResult:
 def narrow(range_str: str, board: list[Card], action: str, *, pot_type: str, street: str,
            n_opponents_active: int = 1, pressure_spent: float = 0.0, pressure_faced: float = 0.0,
            villain_archetype: str | None = None) -> NarrowResult:
-    viable_key = ACTION_TO_VIABLE.get(action)
-    if viable_key is None:
+    """``action`` : "fold"/"check"/"call"/"bet"/"raise" — l'action réellement
+    observée. "fold" et "check" ne filtrent pas (un fold ne dit rien de
+    positif sur la range restante ; un check est un signal trop faible,
+    presque toute main peut checker — approximation documentée, pas un
+    modèle de fréquence de check par classe)."""
+    if action not in ALL_ACTIONS:
         raise ValueError(f"action inconnue pour le narrowing : {action!r}")
+    facing_bet = action in FACING_BET_ACTIONS
+    no_filter = action in ("fold", "check")
 
     board_set = set(board)
     combos = [wc for wc in parse_range(range_str) if not (set(wc.combo) & board_set)]
@@ -52,13 +56,16 @@ def narrow(range_str: str, board: list[Card], action: str, *, pot_type: str, str
 
     kept: list[WeightedCombo] = []
     for wc in combos:
+        if no_filter:
+            kept.append(wc)
+            continue
         hc = classify(list(wc.combo), board)
         b = compute_budget(
             hc, texture, pot_type=pot_type, street=street, n_opponents_active=n_opponents_active,
             pressure_spent=pressure_spent, pressure_faced=pressure_faced,
-            villain_archetype=villain_archetype,
+            villain_archetype=villain_archetype, facing_bet=facing_bet,
         )
-        if viable_key == "fold" or viable_key in b.viable_actions:
+        if action in b.viable_actions:
             kept.append(wc)
 
     original_weight = sum(c.weight for c in combos)

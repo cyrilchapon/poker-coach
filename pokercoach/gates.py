@@ -54,11 +54,32 @@ def g1_preflop_range(*, in_range: bool | None, verdict_if_in_range: str = "raise
     return GateDecision(gate="G1", verdict="fold", confidence="forced")
 
 
-def g2_budget_exhausted(*, envisaged_action: str, viable_actions: list[str]) -> GateDecision | None:
-    if envisaged_action in ("raise", "call") and envisaged_action not in viable_actions:
+def g2_budget_decisive(*, envisaged_action: str, viable_actions: list[str],
+                        att_remaining: float | None = None,
+                        facing_bet: bool = True) -> GateDecision | None:
+    """Le budget ATT/DEF tranche seul, dans un sens ou dans l'autre — pas de
+    raisonnement nécessaire dans les deux cas :
+
+    - **Épuisé** : ``envisaged_action`` ("call"/"raise" face à une mise,
+      "bet" sinon) n'est plus dans ``viable_actions`` -> repli forcé. Sans
+      mise à suivre, le repli est TOUJOURS "check" (gratuit, jamais gaté),
+      jamais "fold" qui n'a pas de sens ici.
+    - **Illimité** (``att_remaining == inf``, réservé à la classe "nuts" —
+      curseur volontairement strict, cf. le seuil de gate à ajuster par
+      l'utilisateur) sans mise à suivre : miser est un verdict évident, pas
+      la peine de calculer des bornes d'équité qui n'existent pas de toute
+      façon (pas de seuil de rentabilité sans mise à comparer) ni
+      d'escalader en G5 comme si c'était une décision grise.
+    """
+    if not facing_bet and att_remaining == float("inf") and "bet" in viable_actions:
+        return GateDecision(gate="G2", verdict="bet", confidence="forced")
+    if envisaged_action not in ("raise", "call", "bet") or envisaged_action in viable_actions:
+        return None
+    if not facing_bet:
+        fallback = "check"
+    else:
         fallback = "call" if "call" in viable_actions else "fold"
-        return GateDecision(gate="G2", verdict=fallback, confidence="forced")
-    return None
+    return GateDecision(gate="G2", verdict=fallback, confidence="forced")
 
 
 def g3_equity_bounds(*, lower_bound: float, upper_bound: float, threshold: float) -> GateDecision | None:
