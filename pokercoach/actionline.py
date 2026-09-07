@@ -46,7 +46,10 @@ def pressure_weight(bet_pct_pot: float) -> float:
 
 def pot_type(state: HandState) -> str:
     preflop = state.streets["preflop"]["actions"]
-    raises = [i for i, a in enumerate(preflop) if a["action"] == "raise"]
+    # "allin" est une catégorie d'action à part entière (state.ACTIONS), pas
+    # un synonyme de "raise" -- mais un shove EST une relance du point de vue
+    # du comptage 3bet/4bet, donc il doit compter comme telle ici.
+    raises = [i for i, a in enumerate(preflop) if a["action"] in ("raise", "allin")]
     if not raises:
         return "limp" if any(a["action"] == "call" for a in preflop) else "srp"
     if len(raises) == 1:
@@ -64,7 +67,8 @@ def is_opening_decision(state: HandState) -> bool:
     ``role()``. Utilisé aussi par ``brief.py`` pour le lookup RFI."""
     if state.street != "preflop":
         return False
-    return not any(a["action"] in ("call", "raise") for a in state.streets["preflop"]["actions"])
+    # "allin" (shove) ouvre le pot tout autant qu'un call/raise classique.
+    return not any(a["action"] in ("call", "raise", "allin") for a in state.streets["preflop"]["actions"])
 
 
 def role(state: HandState, *, seat: int | None = None) -> str:
@@ -86,7 +90,7 @@ def last_aggressor(state: HandState) -> int | None:
         if node is None:
             break
         for act in node["actions"]:
-            if act["action"] in ("bet", "raise"):
+            if act["action"] in ("bet", "raise", "allin"):
                 last = act["seat"]
     return last
 
@@ -125,7 +129,7 @@ def replay_pressure(state: HandState) -> PressureReplay:
                 folded_or_out.add(seat)
                 continue
             amount = float(act.get("amount", 0.0))
-            if act["action"] in ("bet", "raise"):
+            if act["action"] in ("bet", "raise", "allin"):
                 incremental = amount - contributed[seat]
                 pot_before = pot_so_far + sum(contributed.values())
                 bet_pct = (incremental / pot_before * 100) if pot_before > 0 else 100.0

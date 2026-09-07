@@ -140,3 +140,50 @@ def test_outs_present_on_flop_and_turn():
 def test_nut_flush_ace_blocker():
     r = H(["A♠", "4♥"], ["9♠", "6♠", "2♠"])  # three-flush board + hero holds the ace of spades
     assert "bloque la couleur nut" in r.blockers
+
+
+def test_outs_counts_category_jumps_not_raw_score_improvements():
+    # Regression: raw-score comparison (`evaluate(...) > current`) counted
+    # nearly all 47 remaining cards as "outs" because adding any 6th known
+    # card to a 5-card known set almost always improves the best-5-of-6
+    # slightly (it replaces the weakest kicker) without changing the hand's
+    # CATEGORY. Comparing handtype() category instead gives a sane count:
+    # KdQs on Kh7c2d (top pair) jumps to Two Pair or Trips on a Q (3), a K
+    # (2), a 7 (board pairs -> two pair K+77, 3) or a 2 (board pairs -> two
+    # pair K+22, 3) = 11 category-jumping cards -- nowhere near 47.
+    r = H(["K♦", "Q♠"], ["K♥", "7♣", "2♦"])
+    assert r.made == "top_pair"
+    assert r.outs == 11
+
+
+def test_outs_ghost_flush_draw_no_longer_inflates_count():
+    # AsKs on 2s5s9d (a real flush draw: 4 spades between hole+board) used to
+    # report outs=47; category-based counting keeps it sane (well under the
+    # full remaining deck), even counting every card that pairs the board.
+    r = H(["A♠", "K♠"], ["2♠", "5♠", "9♦"])
+    assert r.outs is not None
+    assert r.outs < 30
+
+
+def test_pair_family_classification_is_independent_of_hole_card_order():
+    # Regression: on a board already paired (K♥K♦), both hero hole cards
+    # (7h and 5d) match a board rank each -- `matched[0]` used to just be
+    # "whichever hole card came first in the JSON", so the same hand
+    # classified as second_pair or third_pair depending purely on input
+    # order. Sorting `matched` by board-rank position fixes this.
+    board = ["K♥", "K♦", "7♣", "5♠"]
+    a = H(["7♥", "5♦"], board)
+    b = H(["5♦", "7♥"], board)
+    assert a.made == b.made == "second_pair"
+
+
+def test_flush_draw_requires_hero_to_hold_a_suited_card():
+    # Regression: on a board that is ALREADY a 4-flush (four board cards of
+    # one suit), suit_counts[flush_suit] reaches 4 from the board alone even
+    # when hero holds zero cards of that suit -- has_flush_draw was True
+    # with flush_high=None, silently falling through to "weak_draw" (a
+    # semi-bluff budget hero has no business getting: he's just playing the
+    # board's flush, not drawing to his own).
+    r = H(["A♠", "K♦"], ["2♥", "7♥", "9♥", "J♥"])
+    assert r.draw_sub.get("flush_draw") is not True
+    assert r.draw != "weak_draw"

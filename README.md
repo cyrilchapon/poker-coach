@@ -138,6 +138,40 @@ All three covered by regression tests (`tests/test_budget.py`,
 plus a full hand played start to finish through the real CLI/scripts as a
 manual check, in addition to the automated suite.
 
+**Found by automated PR review** (four more, none caught by the 124 tests
+passing at the time): all in `handclass.py`/`actionline.py`, all real logic
+bugs rather than nitpicks.
+- `handclass._count_outs` compared raw `evaluate()` scores instead of hand
+  *category* — adding any 6th known card to a 5-card known set almost
+  always improves the best-5-of-6 slightly (it replaces the weakest
+  kicker) even when the hand's category doesn't change, so nearly every
+  remaining card counted as an "out" (e.g. 47/47 on a flop). Fixed by
+  comparing `handtype(evaluate(...))` category instead — an out is now a
+  card that changes hand *category* (pair → two pair, draw → made hand),
+  matching what "outs" means at the table.
+- `_classify_pair_family` indexed into `matched[0]` without sorting it
+  first, so on a board already paired (both hole cards each matching a
+  different board rank) the classification depended on the *input order*
+  of hero's two hole cards — `["7h","5d"]` and `["5d","7h"]` (the same
+  hand) landed in different pair buckets (`second_pair` vs `third_pair`).
+  Fixed by sorting `matched` by board-rank position before indexing.
+- `_classify_draw`'s flush-draw detection counted board cards toward the
+  4-of-a-suit threshold with no floor on hero's own contribution — on a
+  board that's already a 4-flush, `has_flush_draw` came back `True` with
+  `flush_high=None` purely from the board, wrongly granting hero a
+  semi-bluff draw budget when he holds no card of that suit at all (he's
+  just "playing the board"). Fixed by requiring `flush_high is not None`.
+- `actionline.py` — `is_opening_decision`, `pot_type`, `last_aggressor`
+  and `replay_pressure` all tested actions against `("bet", "raise")` /
+  `("call", "raise")`, missing `"allin"` (a distinct member of
+  `state.ACTIONS`, not a synonym). A shove was invisible everywhere: a
+  player facing an all-in shove read as `role: "probe"` instead of
+  `"defender"`, and `weighted_pressure_faced` stayed `0.0` despite facing
+  a full stack. Fixed by adding `"allin"` to all four checks.
+
+All four covered by regression tests (`tests/test_handclass.py`,
+`tests/test_actionline.py`).
+
 **Session/multi-hand tooling** is now built, per the direction agreed with
 the user: `pokercoach`'s CLI commands stay unitary and standalone (each one
 takes a `hand.json`, does one job, and knows nothing about "a session") so

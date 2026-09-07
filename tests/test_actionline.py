@@ -115,3 +115,45 @@ def test_pot_type_limp_srp_3bet_squeeze_4bet():
         {"seat": 0, "action": "raise", "amount": 21.0},
     ])
     assert pot_type(four_bet) == "four_bet_pot"
+
+
+def _allin_shove_state() -> "object":
+    raw = {
+        "schema_version": "2.0",
+        "table": {"big_blind": 1.0, "ante": 0.0, "button_seat": 0},
+        "seats": [
+            {"seat": 0, "is_hero": False, "stack": 100.0, "archetype": None, "hud": None,
+             "cards": None, "status": "active"},
+            {"seat": 1, "is_hero": True, "stack": 100.0, "archetype": None, "hud": None,
+             "cards": ["A♦", "K♣"], "status": "active"},
+            {"seat": 2, "is_hero": False, "stack": 100.0, "archetype": None, "hud": None,
+             "cards": None, "status": "folded"},
+            {"seat": 3, "is_hero": False, "stack": 0.0, "archetype": None, "hud": None,
+             "cards": None, "status": "allin"},
+        ],
+        "streets": {
+            "preflop": {"actions": [
+                {"seat": 0, "action": "post", "amount": 0.5},
+                {"seat": 1, "action": "post", "amount": 1.0},
+                {"seat": 2, "action": "fold", "amount": 0.0},
+                {"seat": 3, "action": "allin", "amount": 100.0},
+            ]},
+            "flop": None, "turn": None, "river": None,
+        },
+        "to_act": 1, "hero_seat": 1,
+    }
+    return validate_and_load(raw)
+
+
+def test_allin_action_is_treated_like_a_bet_or_raise_throughout():
+    # Regression: "allin" is a distinct member of state.ACTIONS, not a
+    # synonym of "bet"/"raise"/"call" -- is_opening_decision, last_aggressor
+    # and replay_pressure all missed it, so a shove was invisible: role()
+    # read "probe" instead of "defender", and weighted_pressure_faced stayed
+    # 0.0 despite facing a 100bb shove.
+    state = _allin_shove_state()
+    assert is_opening_decision(state) is False
+    assert last_aggressor(state) == 3
+    assert role(state) == "defender"
+    replay = replay_pressure(state)
+    assert replay.faced[1] > 0.0

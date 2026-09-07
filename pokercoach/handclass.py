@@ -37,7 +37,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .cards import Card, RANKS
-from .handeval import FULL_DECK, evaluate, is_nuts
+from .handeval import FULL_DECK, HAND_CATEGORIES, evaluate, handtype, is_nuts
 from .texture import Texture, classify as classify_texture
 
 KICKER_BUCKETS = ("tptk", "tpsk", "k3", "k4", "k5", "other")
@@ -253,6 +253,13 @@ def _classify_pair_family(hole: list[Card], board: list[Card], texture: Texture)
     matched = [c for c in hole if board_rank_counts.get(c.rank, 0) >= 1]
     if not matched:
         return "weak_showdown", {}, 1.0
+    # Régression : quand les DEUX cartes du héros matchent chacune un rang du
+    # board (board déjà apparié, cf. la note "two pair reclassée" plus haut),
+    # `matched[0]` dépendait de l'ORDRE d'entrée des cartes en main (JSON) et
+    # non de leur force réelle -- même main, classification différente selon
+    # ["7h","5d"] vs ["5d","7h"]. On trie par position dans le board (la
+    # meilleure paire, celle la plus haute au board) avant d'indexer.
+    matched.sort(key=lambda c: board_ranks_sorted.index(c.rank))
     paired_card = matched[0]
     position = board_ranks_sorted.index(paired_card.rank)
 
@@ -314,8 +321,14 @@ def _classify_draw(hole: list[Card], board: list[Card], texture: Texture) -> tup
     for c in hole + board:
         suit_counts[c.suit] = suit_counts.get(c.suit, 0) + 1
     flush_suit = max(suit_counts, key=lambda s: suit_counts[s])
-    has_flush_draw = suit_counts[flush_suit] == 4
     flush_high = max((c for c in hole if c.suit == flush_suit), key=lambda c: c.rank_index, default=None)
+    # Régression : sur un board déjà "four flush" (4 cartes de la même
+    # couleur au board), `suit_counts[flush_suit]` atteint 4 par le board
+    # SEUL -- même si le héros ne possède aucune carte de cette couleur. Sans
+    # la garde sur `flush_high`, ça se traduisait par has_flush_draw=True
+    # avec flush_high=None, qui retombait ensuite sur `r=0` -> "weak_draw" à
+    # tort (le héros "joue le board", il n'a pas de tirage couleur perso).
+    has_flush_draw = suit_counts[flush_suit] == 4 and flush_high is not None
 
     combined = _rank_indices_with_ace_low(hole + board)
     hole_indices = {c.rank_index for c in hole}
@@ -375,10 +388,20 @@ def _classify_draw(hole: list[Card], board: list[Card], texture: Texture) -> tup
 # --- Outs et blockers ---------------------------------------------------------
 
 def _count_outs(hole: list[Card], board: list[Card]) -> int:
-    current = evaluate(hole + board)
+    # Régression : comparer le score BRUT (`evaluate(...) > current`) comptait
+    # presque toutes les cartes restantes comme "out", parce qu'ajouter une
+    # 6e/7e carte connue améliore quasi toujours légèrement le meilleur-5-de-N
+    # (elle remplace le kicker le plus faible) même sans changer la NATURE de
+    # la main. Un "out" au sens poker, c'est une carte qui fait changer de
+    # CATÉGORIE (paire -> deux paires, tirage -> couleur, etc.), pas une carte
+    # qui améliore juste un kicker à catégorie égale.
+    current_category_idx = HAND_CATEGORIES.index(handtype(evaluate(hole + board)))
     known = set(hole) | set(board)
     remaining = [c for c in FULL_DECK if c not in known]
-    return sum(1 for c in remaining if evaluate(hole + board + [c]) > current)
+    return sum(
+        1 for c in remaining
+        if HAND_CATEGORIES.index(handtype(evaluate(hole + board + [c]))) > current_category_idx
+    )
 
 
 def _blockers(hole: list[Card], board: list[Card], texture: Texture) -> list[str]:
