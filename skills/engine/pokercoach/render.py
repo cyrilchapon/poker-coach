@@ -11,12 +11,17 @@ la v1 et ne doit pas être perdu") :
 - le timing (snap/tank...) ne s'affiche pas dans la grille, il se raconte en
   prose ailleurs ;
 - fold affiche quand même le montant engagé au tour précédent ;
+- blind postée (SB/BB) : affichée comme "sb"/"bb", pas "post" ;
 - case vide (pas de "...") si le siège n'a pas encore agi ;
-- board + pot centrés à l'intérieur, largeur du rectangle invariante (jamais
-  de dépassement qui décale le bord) ;
-- le Héros est toujours affiché en bas ;
-- sièges "horizontaux" (Héros en bas, éventuellement un siège en haut) :
-  ligne combinée centrée à l'intérieur/extérieur ;
+- board + pot centrés à l'intérieur (à mi-hauteur du rectangle, pas collés à
+  un bord), largeur du rectangle invariante (jamais de dépassement qui
+  décale le bord) ;
+- le Héros est toujours affiché en bas, son action/montant colle au bord
+  inférieur (pas de ligne vide avant la bordure) ;
+- siège "top" (s'il y en a un) : identité + stack DEHORS (au-dessus de la
+  bordure), action + montant DEDANS (première ligne intérieure, sous la
+  bordure — jamais dehors, sinon une ligne vide parasite apparaît sous son
+  bloc extérieur) ;
 - sièges "verticaux" (colonnes gauche/droite, de part et d'autre du
   rectangle) : identité puis stack (2 lignes) dehors, action puis montant
   (2 lignes séparées) dedans, alignées du côté du joueur.
@@ -33,6 +38,11 @@ coins + 1 haut) : les sièges non-Héros, dans l'ordre de parole réel
   colonne droite prend les sièges les plus proches du haut (haut -> bas) ;
   ce qui reproduit exactement le placement 4-coins + top de la v1 quand il
   y a 5 sièges non-Héros (6-max).
+
+Les paires gauche/droite qui en résultent sont elles-mêmes réparties pour
+moitié au-dessus du board/pot, pour moitié en dessous (comme les 2 rangées
+de coins de la v1), afin que le board/pot reste au centre du rectangle au
+lieu de s'entasser sous tous les sièges.
 """
 from __future__ import annotations
 
@@ -64,14 +74,19 @@ def _r(text: str, width: int) -> str:
     return str(text)[:width].rjust(width)
 
 
+def _action_text(pos: str | None, action: str) -> str:
+    """"post" (blind) devient "sb"/"bb" pour le siège concerné — plus lisible
+    que le nom générique de l'action."""
+    if pos in ("SB", "BB") and action == "post":
+        return pos.lower()
+    return action
+
+
 def _split_layout(order: list[str]) -> tuple[list[str], str | None, list[str]]:
     """Répartit ``order`` (clockwise depuis la gauche du Héros) en
     (colonne_gauche bas->haut, siège_top ou None, colonne_droite haut->bas)."""
     n = len(order)
-    if n % 2 == 1:
-        top_seats = 1
-    else:
-        top_seats = 0
+    top_seats = 1 if n % 2 == 1 else 0
     side_total = n - top_seats
     left_count = side_total // 2
     left_labels = order[:left_count]
@@ -107,6 +122,16 @@ def render(*, seats: dict[str, dict], hero_position: str, hero: dict, board: lis
     left_col = list(reversed(left_labels))  # rendu haut -> bas
     right_col = right_labels                # déjà haut -> bas
 
+    # Les paires (gauche, droite) sont réparties pour moitié au-dessus du
+    # board/pot, pour moitié en dessous (le board/pot reste au centre).
+    n_pairs = max(len(left_col), len(right_col))
+    pairs = [
+        (left_col[i] if i < len(left_col) else None, right_col[i] if i < len(right_col) else None)
+        for i in range(n_pairs)
+    ]
+    n_above = n_pairs // 2
+    pairs_above, pairs_below = pairs[:n_above], pairs[n_above:]
+
     lines: list[str] = []
     if street:
         lines.append(_c(f"── {street} ──", TOTAL_W))
@@ -116,18 +141,14 @@ def render(*, seats: dict[str, dict], hero_position: str, hero: dict, board: lis
         if s(top_label, "cards"):
             lines.append(_c(" ".join(s(top_label, "cards")), TOTAL_W))
         lines.append(_c(f"{label(top_label)} · {bb(s(top_label, 'stack', ''))}", TOTAL_W))
-        action, amount = s(top_label, "action", ""), s(top_label, "amount")
-        content = f"{action} · {bb(amount)}" if action and amount else (action or "")
-        lines.append(_c(content, TOTAL_W))
-        lines.append("")
 
     lines.append(" " * SIDE_W + "╭" + "─" * INNER + "╮")
 
     def vertical_row(pos_l: str | None, pos_r: str | None) -> list[str]:
         left_label = _r(label(pos_l), SIDE_W - 1) + " │"
         right_label = "│ " + label(pos_r)
-        act_l = _l(s(pos_l, "action", ""), HALF)
-        act_r = _r(s(pos_r, "action", ""), HALF)
+        act_l = _l(_action_text(pos_l, s(pos_l, "action", "")), HALF)
+        act_r = _r(_action_text(pos_r, s(pos_r, "action", "")), HALF)
         row1 = left_label + act_l + act_r + right_label
 
         left_stack = _r(bb(s(pos_l, "stack", "")), SIDE_W - 1) + " │"
@@ -146,17 +167,33 @@ def render(*, seats: dict[str, dict], hero_position: str, hero: dict, board: lis
             rows.append(left_cards + " " * INNER + right_cards)
         return rows
 
-    max_rows = max(len(left_col), len(right_col))
-    for i in range(max_rows):
-        pos_l = left_col[i] if i < len(left_col) else None
-        pos_r = right_col[i] if i < len(right_col) else None
-        lines.extend(vertical_row(pos_l, pos_r))
-        lines.append(" " * SIDE_W + "│" + " " * INNER + "│")
+    blank = " " * SIDE_W + "│" + " " * INNER + "│"
 
+    # Sections empilées à l'intérieur du rectangle, séparées par une ligne
+    # vide (jamais de ligne vide avant le Héros, qui colle à la bordure).
+    sections: list[list[str]] = []
+    if top_label:
+        action, amount = s(top_label, "action", ""), s(top_label, "amount")
+        action = _action_text(top_label, action)
+        top_content = f"{action} · {bb(amount)}" if action and amount else (action or "")
+        sections.append([" " * SIDE_W + "│" + _c(top_content, INNER) + "│"])
+    for pos_l, pos_r in pairs_above:
+        sections.append(vertical_row(pos_l, pos_r))
     board_cells = (board + ["--"] * 5)[:5]
-    lines.append(" " * SIDE_W + "│" + _c(" ".join(board_cells), INNER) + "│")
-    lines.append(" " * SIDE_W + "│" + _c(f"pot · {bb(pot)}", INNER) + "│")
-    hero_action, hero_amount = hero.get("action", "?"), hero.get("amount")
+    sections.append([
+        " " * SIDE_W + "│" + _c(" ".join(board_cells), INNER) + "│",
+        " " * SIDE_W + "│" + _c(f"pot · {bb(pot)}", INNER) + "│",
+    ])
+    for pos_l, pos_r in pairs_below:
+        sections.append(vertical_row(pos_l, pos_r))
+
+    for section in sections:
+        lines.extend(section)
+        lines.append(blank)
+    lines.pop()  # pas de ligne vide entre la dernière section et le Héros
+
+    hero_action = _action_text(hero_position, hero.get("action", "?"))
+    hero_amount = hero.get("amount")
     hero_content = f"{hero_action} · {bb(hero_amount)}" if hero_action and hero_amount else hero_action
     lines.append(" " * SIDE_W + "│" + _c(hero_content, INNER) + "│")
     lines.append(" " * SIDE_W + "╰" + "─" * INNER + "╯")
