@@ -21,12 +21,15 @@ Sous-commandes :
     pc showdown --board B --hand NAME:C1C2 [--hand NAME:C1C2 ...]
     pc glossary <terme>
     pc apply    --hand hand.json --action "b 5.5"  applique une action, réécrit l'état
+    pc paths    chemins absolus resolus de pokercoach/, data/, docs/ (utile hors dev :
+                claude.ai déploie chaque skill isolée, sans racine de repo commune)
 """
 from __future__ import annotations
 
 import argparse
 import json
 import sys
+from pathlib import Path
 from typing import Any
 
 from . import actionline, brief as brief_mod, budget as budget_mod, glossary, handclass
@@ -267,6 +270,22 @@ def cmd_glossary(args: argparse.Namespace) -> dict[str, Any]:
     return {"term": args.term, "definition": definition}
 
 
+def cmd_paths(_args: argparse.Namespace) -> dict[str, Any]:
+    """Chemins absolus de ce déploiement de l'engine : ``pokercoach/`` (ce
+    package), ``data/`` (tables YAML) et ``docs/`` (références), tous trois
+    frères dans la skill ``engine`` (cf. ``skills/engine/``). Existe parce
+    que les autres skills n'ont, sur claude.ai, aucune racine de repo
+    commune à partir de laquelle deviner ces chemins par eux-mêmes -- voir
+    ``scripts/pc_bootstrap.py`` dans chaque skill, qui les localise avant
+    même que cette commande soit utilisable."""
+    engine_dir = Path(__file__).resolve().parent.parent
+    return {
+        "pokercoach_dir": str(engine_dir / "pokercoach"),
+        "data_dir": str(engine_dir / "data"),
+        "docs_dir": str(engine_dir / "docs"),
+    }
+
+
 # --- apply ---------------------------------------------------------------
 
 _SHORTHAND = {"f": "fold", "x": "check", "c": "call", "b": "bet", "r": "raise", "a": "allin"}
@@ -493,6 +512,9 @@ def build_parser() -> argparse.ArgumentParser:
     hand_arg(p)
     p.add_argument("--action", required=True, help='ex "b 5.5", "c", "x", "f", "r 12"')
     p.set_defaults(func=cmd_apply)
+
+    p = sub.add_parser("paths", help="chemins absolus de pokercoach/, data/, docs/ pour ce déploiement")
+    p.set_defaults(func=cmd_paths)
 
     return parser
 

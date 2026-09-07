@@ -7,11 +7,11 @@ description: Calcul d'équité main vs range ou range vs range, exécuté via `p
 
 ## v2 : plus de script à installer, un sous-programme du CLI `pc`
 
-Le moteur est du Python pur (module `pokercoach`, packagé), pas un script sandbox séparé — pas de `pip install` à refaire à chaque session.
+Le moteur est du Python pur (module `pokercoach`, packagé), pas un script sandbox séparé — pas de `pip install` à refaire à chaque session. Invoqué ici via `scripts/pc` (à la racine de cette skill) : se localise lui-même (voir `engine`), qu'il soit pip-installé (Claude Code) ou non (claude.ai).
 
 ```bash
-pc equity --hand hand.json --vs "<range>"                       # cartes exactes du héros vs une range
-pc equity --range1 "<range1>" --vs "<range2>" --board "..." --dead "..." --iterations 20000
+scripts/pc equity --hand hand.json --vs "<range>"                       # cartes exactes du héros vs une range
+scripts/pc equity --range1 "<range1>" --vs "<range2>" --board "..." --dead "..." --iterations 20000
 ```
 
 - `--range1` / `--vs` : notation `range-notation` (ex `"QQ+,AKs"`), y compris une main exacte (`AsKd`) et la pondération `@xx%` — les deux limitations connues de la v1 sont levées.
@@ -35,8 +35,8 @@ Sortie : `{"range1_equity": ..., "range2_equity": ..., "method": "enumeration"|"
 ## Sizing (%pot / montant de relance)
 
 ```bash
-pc sizing bet-pct --bet 10 --pot-before 15.5
-pc sizing raise-to --pot-before-bet 6.5 --bet-to-call 3.5 --fraction 1.0
+scripts/pc sizing bet-pct --bet 10 --pot-before 15.5
+scripts/pc sizing raise-to --pot-before-bet 6.5 --bet-to-call 3.5 --fraction 1.0
 ```
 
 Jamais de calcul de tête — voir `pc glossary` pour la convention bet vs raise.

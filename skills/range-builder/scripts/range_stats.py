@@ -2,15 +2,23 @@
 Statistiques rapides sur une range écrite en notation standard (voir skill
 range-notation).
 
-v2 : réutilise `pokercoach.equity.parse_range` (installé en package) au lieu
-d'un parseur dupliqué — un seul endroit qui connaît la grammaire de range.
+v2 : réutilise `pokercoach.equity.parse_range` (installé en package, ou
+localisé sans installation par pc_bootstrap.py sur claude.ai) au lieu d'un
+parseur dupliqué — un seul endroit qui connaît la grammaire de range.
 
 Usage :
     python3 range_stats.py "77+,ATs+,AJo+,KQs"
 """
 import argparse
+import sys
+from pathlib import Path
 
-from pokercoach.equity import parse_range
+sys.path.insert(0, str(Path(__file__).parent))
+from pc_bootstrap import ensure_pokercoach_on_path  # noqa: E402
+
+ensure_pokercoach_on_path()
+
+from pokercoach.equity import parse_range  # noqa: E402
 
 
 def range_stats(range_str: str) -> dict:

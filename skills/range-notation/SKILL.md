@@ -30,8 +30,8 @@ Représentation canonique d'une range : grille 13x13, rangs de A (haut/gauche) �
 ## Utilisation avec le moteur
 
 ```bash
-pc equity --range1 "QQ+,AKs" --vs "22+,A2s+,K7s+,Q9s+" --board "9d,6c,2h"
-pc narrow --hand hand.json --action call --range "22+,A2s+,K7s+"
+scripts/pc equity --range1 "QQ+,AKs" --vs "22+,A2s+,K7s+,Q9s+" --board "9d,6c,2h"
+scripts/pc narrow --hand hand.json --action call --range "22+,A2s+,K7s+"
 ```
 
 `pc equity` accepte aussi `--hand hand.json` pour utiliser directement les deux cartes exactes du héros comme `range1`.

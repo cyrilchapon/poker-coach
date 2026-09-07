@@ -14,4 +14,5 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -e ".[dev]"
+      - run: python3 scripts/sync_engine_bootstrap.py --check
       - run: pytest -q

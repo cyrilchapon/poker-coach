@@ -1,0 +1,26 @@
+#!/usr/bin/env python3
+"""Wrapper autonome pour `pc` (voir pokercoach.cli), utilisable sans `pip
+install` -- localise l'engine via pc_bootstrap avant de dispatcher.
+
+Copie identique dans le dossier ``scripts/`` de chaque skill du plugin
+poker-coach qui invoque `pc` (source canonique : ce fichier, dans la skill
+`engine` -- resynchronisé ailleurs par
+`scripts/sync_engine_bootstrap.py` à la racine du repo).
+
+Usage : identique à `pc` une fois installé, ex.
+    python3 scripts/pc brief --hand hand.json --villain-archetype fish
+"""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+from pc_bootstrap import ensure_pokercoach_on_path  # noqa: E402
+
+ensure_pokercoach_on_path()
+
+from pokercoach.cli import main  # noqa: E402
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -7,8 +7,9 @@ postflop_acting_order_offsets``).
 Volontairement HORS du cœur ``pokercoach`` : c'est une commodité de session
 (live-session, ou toute simulation main par main), pas une brique du moteur
 d'analyse générique — cf. README, "Session/multi-hand tooling". Réutilise
-``pokercoach`` (installé en package) pour la validation/dérivation, n'y
-ajoute rien.
+``pokercoach`` (installé en package, ou localisé sans installation par
+pc_bootstrap.py sur claude.ai — voir ce module) pour la validation/dérivation,
+n'y ajoute rien.
 
 Usage :
     python3 advance_street.py --hand hand.json --deal "T♠,9♥,2♣"   # preflop -> flop
@@ -24,9 +25,15 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from pathlib import Path
 
-from pokercoach.cards import CardError, parse_cards
-from pokercoach.state import (
+sys.path.insert(0, str(Path(__file__).parent))
+from pc_bootstrap import ensure_pokercoach_on_path  # noqa: E402
+
+ensure_pokercoach_on_path()
+
+from pokercoach.cards import CardError, parse_cards  # noqa: E402
+from pokercoach.state import (  # noqa: E402
     BOARD_SIZE, StateError, derive, postflop_acting_order_offsets,
     street_contribution, validate_and_load,
 )

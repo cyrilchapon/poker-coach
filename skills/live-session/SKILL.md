@@ -22,7 +22,7 @@ Les transitions de rue et le passage à la main suivante (rotation du bouton, pe
 
 ## Notation standard des profils adversaires (HUD-style), archétypes, pondération de population
 
-Inchangé de la v1 — voir `data/multiway-adjustment.yaml` (`random_archetype_weights`, `archetype_baselines`) pour les tables, et `exploit-coach` pour la doctrine par archétype. Format : `(VPIP/PFR/3Bet%/AF)`. Une table complète se décrit :
+Inchangé de la v1 — voir `data/multiway-adjustment.yaml` (`random_archetype_weights`, `archetype_baselines` — chemin absolu via `scripts/pc paths`, clé `data_dir`) pour les tables, et `exploit-coach` pour la doctrine par archétype. Format : `(VPIP/PFR/3Bet%/AF)`. Une table complète se décrit :
 
 ```
 Table: 6-max, 100bb effectif
@@ -61,7 +61,7 @@ Une partie des paramètres est fixée, le reste en `Random` — tirer selon la p
 À chaque **changement de rue** (pas à chaque action individuelle) :
 
 ```bash
-pc render --hand hand.json
+scripts/pc render --hand hand.json
 ```
 
 Génère automatiquement le rendu ASCII conforme aux règles v1 préservées dans `render.py` : unité `𝄫`, rectangle invariant, identité/stack dehors, action/montant dedans, fold affiche quand même le montant engagé, pas de `"..."`, board+pot toujours centrés et incluant toutes les mises de la rue en cours, terminologie stricte bet (première mise, jamais preflop) vs raise.
@@ -81,10 +81,12 @@ Ne pas sur-interpréter systématiquement — indice probabiliste, pas certitude
 ## Transitions de rue et main suivante
 
 ```bash
-python3 skills/live-session/scripts/advance_street.py --hand hand.json --deal "5♦"
-python3 skills/live-session/scripts/new_hand.py --hand hand.json --winner 1
-python3 skills/live-session/scripts/new_hand.py --hand hand.json --split 0,1   # égalité au showdown
+python3 scripts/advance_street.py --hand hand.json --deal "5♦"
+python3 scripts/new_hand.py --hand hand.json --winner 1
+python3 scripts/new_hand.py --hand hand.json --split 0,1   # égalité au showdown
 ```
+
+(Chemins relatifs à la racine de cette skill — pas à celle du repo.)
 
 `advance_street.py` : ouvre la rue suivante (preflop→flop attend 3 cartes, flop→turn et turn→river en attendent 1). Refuse si l'action de la rue courante n'est pas close (il manque une décision), si le nombre de cartes ne correspond pas, si une carte est déjà connue dans la main, ou si on est déjà à la river. Réécrit `hand.json` en place et pointe `to_act` sur le bon siège (ordre postflop : la SB en premier, le Bouton en dernier).
 
@@ -95,7 +97,7 @@ Ces deux scripts sont volontairement hors du moteur `pokercoach` (voir la note e
 ## Résolution des showdowns — obligatoire, jamais à l'œil
 
 ```bash
-pc showdown --board "<5 cartes séparées par des virgules>" --hand "Hero:<2 cartes>" --hand "<Position>:<2 cartes>"
+scripts/pc showdown --board "<5 cartes séparées par des virgules>" --hand "Hero:<2 cartes>" --hand "<Position>:<2 cartes>"
 ```
 
 Aucune exception, même quand le résultat semble évident — une erreur d'évaluation manuelle casse la confiance dans l'outil entier, un calcul déterministe ne se trompe jamais sur ce point.
@@ -103,10 +105,10 @@ Aucune exception, même quand le résultat semble évident — une erreur d'éva
 ## Déroulé d'une main
 
 1. Annoncer le setup (table, stacks, profils) une seule fois en début de session. **Si plusieurs sièges partagent un archétype marqué** (plusieurs Fish/calling stations), le signaler et appliquer par défaut la doctrine `exploit-coach` correspondante sur toute la session sans attendre la demande.
-2. Distribuer les cartes du Héros. Pour chaque rue : dérouler les actions adverses (avec timing si notable), `pc apply` pour chaque action (héros compris), `pc render` avant la décision du Héros. Une fois l'action d'une rue close, `scripts/advance_street.py` ouvre la suivante (distribuer les cartes cohérentes avec le deck restant) avant de reprendre les actions.
+2. Distribuer les cartes du Héros. Pour chaque rue : dérouler les actions adverses (avec timing si notable), `scripts/pc apply` pour chaque action (héros compris), `scripts/pc render` avant la décision du Héros. Une fois l'action d'une rue close, `scripts/advance_street.py` ouvre la suivante (distribuer les cartes cohérentes avec le deck restant) avant de reprendre les actions.
 3. **Avant chaque décision du Héros** : poser la question ouverte ("qu'est-ce que tu fais ?") plutôt que de suggérer une action.
 4. **Si le Héros fold** : la main ne s'arrête pas là. Continuer à simuler les joueurs restants (cohérents avec leur profil HUD) jusqu'à un seul joueur restant ou un showdown. Résumer ensuite brièvement qui remporte le pot, et afficher toute main montrée (`cards` dans `pc render`, plausible chez un Maniac) — objectif : permettre à l'utilisateur de confirmer sa lecture du profil après coup.
-5. **Après chaque décision du Héros qui dépasse une ligne** : `pc brief --hand hand.json [--villain-archetype X]`, un seul appel. Verbosité pilotée par le `gate` retourné (voir `docs/brief/references/02-architecture-v2.md`) — ne pas produire une analyse en 6 points sur une décision déjà tranchée en G0-G2.
+5. **Après chaque décision du Héros qui dépasse une ligne** : `scripts/pc brief --hand hand.json [--villain-archetype X]`, un seul appel. Verbosité pilotée par le `gate` retourné (voir `docs/brief/references/02-architecture-v2.md` — chemin absolu via `scripts/pc paths`, clé `docs_dir`) — ne pas produire une analyse en 6 points sur une décision déjà tranchée en G0-G2.
 
    **Signal d'alerte ponctuel (à utiliser avec retenue)** : si l'utilisateur justifie de continuer une ligne agressive déjà engagée en s'appuyant sur un seuil de rentabilité bas comme raison principale, le signaler **une fois**, brièvement, avant qu'il n'exécute la décision coûteuse — pas répété dans la même main. L'utilisateur peut jouer des lignes non conservatrices pour le plaisir : ce n'est pas un blocage, un point nommé une fois au bon moment.
 

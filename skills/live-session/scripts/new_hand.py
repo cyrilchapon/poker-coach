@@ -30,8 +30,16 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from pathlib import Path
 
-from pokercoach.state import StateError, preflop_acting_order_offsets, remaining_stack, validate_and_load
+sys.path.insert(0, str(Path(__file__).parent))
+from pc_bootstrap import ensure_pokercoach_on_path  # noqa: E402
+
+ensure_pokercoach_on_path()
+
+from pokercoach.state import (  # noqa: E402
+    StateError, preflop_acting_order_offsets, remaining_stack, validate_and_load,
+)
 
 
 def _blind_seats(button_seat: int, n: int) -> tuple[int, int]:
