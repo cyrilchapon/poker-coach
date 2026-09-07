@@ -378,8 +378,21 @@ def n_defenders(state: HandState) -> int:
 
 def effective_stack(state: HandState, *, seat: int | None = None) -> float:
     """Stack effectif : le plus petit stack restant parmi les sièges encore en
-    lice pour le pot (celui qui plafonne ce qui peut être gagné/perdu)."""
-    return min(remaining_stack(state, s.seat) for s in state.seats if s.status in ("active", "allin"))
+    lice pour le pot (celui qui plafonne ce qui peut être gagné/perdu).
+
+    Avec ``seat`` : le stack effectif DE CE SIÈGE précisément, c-à-d le
+    plafond entre son propre stack et le plus petit stack adverse encore en
+    lice (ce que ce siège peut réellement gagner/perdre face à la table).
+    Sans ``seat`` (défaut) : le plus petit stack parmi tous les sièges en
+    lice, toute la table.
+    """
+    in_hand = [s.seat for s in state.seats if s.status in ("active", "allin")]
+    if seat is None:
+        return min(remaining_stack(state, s) for s in in_hand)
+    others = [s for s in in_hand if s != seat]
+    if not others:
+        return remaining_stack(state, seat)
+    return min(remaining_stack(state, seat), min(remaining_stack(state, s) for s in others))
 
 
 @dataclass

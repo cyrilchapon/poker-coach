@@ -181,10 +181,19 @@ def _narrow_through_history(seed: str, state: HandState, villain_seat: int, pot_
         if villain_actions:
             last_action = villain_actions[-1]["action"]
             if last_action != "post":
+                # Régression : sans ce rejeu de pression, chaque rue repartait
+                # d'un budget ATT/DEF neuf (0.0/0.0) -- un villain qui a déjà
+                # barrelé deux fois était filtré comme s'il ouvrait l'action
+                # à froid. `replay_pressure(upto_street=...)` donne la
+                # pression RÉELLEMENT accumulée par ce siège jusqu'à cette
+                # rue incluse.
+                replay = actionline.replay_pressure(state, upto_street=street)
                 try:
                     result = narrow_mod.narrow(
                         current, node["board"], last_action, pot_type=pot_type, street=street,
                         n_opponents_active=n_opponents_active,
+                        pressure_spent=replay.spent.get(villain_seat, 0.0),
+                        pressure_faced=replay.faced.get(villain_seat, 0.0),
                     )
                     if result.range_str:
                         current = result.range_str

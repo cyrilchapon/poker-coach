@@ -79,6 +79,34 @@ def test_advance_rejects_from_river():
         advance_street.advance(raw, "2♦")
 
 
+def test_advance_rejects_when_one_active_seat_never_acted():
+    # Regression: the action-closed check only compared CONTRIBUTIONS
+    # ([0.0, 0.0] for two players who both checked -- but even a single
+    # check on a two-player street trivially satisfies "equal contributions"
+    # if the other player never acted at all).
+    raw = load_fixture("hu_flop_cbet.json")
+    raw = copy.deepcopy(raw)
+    raw["streets"]["flop"]["actions"] = [{"seat": 1, "action": "check", "amount": 0}]
+    with pytest.raises(StateError, match="non close"):
+        advance_street.advance(raw, "5♦")
+
+
+def test_advance_rejects_when_only_one_seat_is_still_contesting_the_pot():
+    # Regression: if everyone else folded, the street used to still "close"
+    # trivially (a single active seat's contribution is vacuously equal to
+    # itself) and open the next street instead of ending the hand.
+    raw = load_fixture("hu_flop_cbet.json")
+    raw = copy.deepcopy(raw)
+    raw["streets"]["flop"]["actions"] = [
+        {"seat": 1, "action": "bet", "amount": 4.0},
+        {"seat": 0, "action": "fold", "amount": 0.0},
+    ]
+    raw["seats"][0]["status"] = "folded"
+    raw["to_act"] = 1  # the only seat left to act on anything is the winner
+    with pytest.raises(StateError, match="décidée"):
+        advance_street.advance(raw, "5♦")
+
+
 def test_advance_allows_all_in_seats_to_have_a_lower_contribution():
     # seat1 shoves for less than the pot would require in a non-all-in call;
     # the action is still "closed" because all-in seats are excluded from
@@ -216,3 +244,33 @@ def test_new_hand_refuses_when_table_shrinks_past_the_expected_blind_seats():
     }
     with pytest.raises(StateError, match="rétréci"):
         new_hand.build_next_hand(raw, winners=[0, 1])  # seat 2 busts out
+
+
+def test_new_hand_rejects_a_folded_seat_as_winner():
+    # Regression: eligibility was checked against `new_stacks` (built from
+    # EVERY seat unconditionally), not against who was actually still in
+    # the hand -- a folded seat could be declared "winner" without error.
+    raw = _hu_finished_hand()
+    raw["seats"][1] = dict(raw["seats"][1])
+    raw["seats"][1]["status"] = "folded"
+    with pytest.raises(StateError, match="invalide"):
+        new_hand.build_next_hand(raw, winners=[1])
+
+
+def test_new_hand_posts_the_ante_for_every_active_seat():
+    # Regression: table.ante was carried forward on the new hand's table
+    # config but never actually posted as an action -- the pot was
+    # under-counted by n_active * ante on every subsequent hand.
+    raw = _hu_finished_hand()
+    raw = dict(raw)
+    raw["table"] = dict(raw["table"])
+    raw["table"]["ante"] = 0.1
+    next_hand = new_hand.build_next_hand(raw, winners=[0])
+
+    preflop = next_hand["streets"]["preflop"]["actions"]
+    posts = {a["seat"]: a["amount"] for a in preflop if a["action"] == "post"}
+    # HU: new button/SB = seat 1, BB = seat 0 (button rotated from 0 to 1).
+    assert posts[1] == pytest.approx(0.5 + 0.1)  # SB + ante, folded into one action
+    assert posts[0] == pytest.approx(1.0 + 0.1)  # BB + ante
+    from pokercoach.state import validate_and_load as _load, pot as _pot
+    assert _pot(_load(next_hand)) == pytest.approx(1.5 + 0.2)

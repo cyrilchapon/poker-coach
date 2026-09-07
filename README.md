@@ -138,9 +138,9 @@ All three covered by regression tests (`tests/test_budget.py`,
 plus a full hand played start to finish through the real CLI/scripts as a
 manual check, in addition to the automated suite.
 
-**Found by automated PR review** (four more, none caught by the 124 tests
-passing at the time): all in `handclass.py`/`actionline.py`, all real logic
-bugs rather than nitpicks.
+**Found by automated PR review** (13 review threads total; none caught by
+the 124 tests passing at the time). The four ⛔ blocking findings in
+`handclass.py`/`actionline.py` — all real logic bugs, not nitpicks:
 - `handclass._count_outs` compared raw `evaluate()` scores instead of hand
   *category* — adding any 6th known card to a 5-card known set almost
   always improves the best-5-of-6 slightly (it replaces the weakest
@@ -169,8 +169,59 @@ bugs rather than nitpicks.
   `"defender"`, and `weighted_pressure_faced` stayed `0.0` despite facing
   a full stack. Fixed by adding `"allin"` to all four checks.
 
-All four covered by regression tests (`tests/test_handclass.py`,
-`tests/test_actionline.py`).
+A fifth ⛔ finding — `pc apply` writing an unvalidated `hand.json` straight
+to disk — was also fixed: `cmd_apply` now validates legality (check/bet
+illegal while facing a bet, call/raise illegal without one) *and* amount
+(call/check/fold have exactly one legal amount; bet/raise must clear the
+minimum-raise increment and can't exceed the seat's stack; `allin` must
+equal the full remaining stack) before touching the filesystem at all, sets
+`seats[n].status = "allin"` on an all-in action (previously only `"fold"`
+updated status), and writes atomically (temp file + `os.replace`) so a
+rejected action never leaves a corrupted or partial file on disk.
+
+Six more ⚠️/💡 findings (correctness and one perf issue, not blocking) were
+also fixed:
+- `state.effective_stack(seat=...)` ignored its `seat` parameter entirely
+  (always returned the table-wide min) — the one call site that passes
+  `seat=` (`ranges/table.py`'s stack-bucket lookup for `vs_3bet`/`vs_4bet`)
+  was silently using the wrong number. Now returns
+  `min(that seat's stack, min of opponents still in the hand)`.
+- `brief._narrow_through_history` called `ranges.narrow.narrow()` without
+  `pressure_spent`/`pressure_faced`, so every street's narrowing restarted
+  from a fresh 0.0/0.0 budget — a villain who'd already barrelled twice got
+  filtered as if opening the action cold. `actionline.replay_pressure()`
+  gained an `upto_street` bound so the real cumulative pressure at each
+  street can be passed through.
+- `advance_street.py`'s action-closed check only compared *contributions*
+  (`[0.0, 0.0]` for two players is trivially "equal" even if only one of
+  them actually checked) — now also requires every active seat to have
+  taken at least one voluntary action this street, and refuses to open a
+  new street at all when only one seat is still contesting the pot (the
+  hand is already over; award the pot instead).
+- `new_hand.py`: `table.ante` was carried forward into the next hand's
+  config but never actually posted (pot under-counted whenever `ante > 0`);
+  `--winner`/`--split` accepted any seat number, including one that had
+  folded the previous hand; and a dead `remainder` variable implied
+  odd-chip handling that the float-division `share` never produces. Fixed
+  all three; `remainder` and its docstring line removed.
+- `budget.py`'s `elif texture.suit == "three_flush" and not applied_flush`
+  guard could never be `False` (the two branches are already
+  mutually-exclusive on `texture.suit`) — dead condition, removed.
+  `att_after_penalties`/`def_after_penalties` were computed but missing
+  from `to_json()`; now exposed for debugging the penalty order.
+- `equity._monte_carlo_equity` rebuilt `itertools.accumulate(weights)`
+  inside `rng.choices()` on every one of `iterations` draws — now
+  precomputed once and passed as `cum_weights`.
+
+All ten fixes covered by regression tests (`tests/test_handclass.py`,
+`tests/test_actionline.py`, `tests/test_cli.py`,
+`tests/test_live_session_scripts.py`). Two remaining ⚠️ findings —
+`pc brief` not covering preflop *defense* spots, and G2/G3 gate-priority —
+are architectural/feature-sized rather than local fixes; see "Still open"
+below. One low-priority 💡 suggestion (avoid materializing the full
+range×range cartesian product for Monte Carlo) and one YAML-indexing
+robustness note (`budget.py`'s positional `matrix[0..5]` lookups) are noted
+but not acted on.
 
 **Session/multi-hand tooling** is now built, per the direction agreed with
 the user: `pokercoach`'s CLI commands stay unitary and standalone (each one
@@ -192,6 +243,23 @@ each):
 Still open:
 - 7/8-max range precision if the parameterized generalization proves too
   imprecise in practice (unchanged — no real usage to calibrate against yet).
+- `pc brief` doesn't cover preflop *defense* (vs an open/limp/3bet/4bet) —
+  only RFI (G1) is wired in. `ranges/table.py`'s `vs_rfi`/`vs_limp`/
+  `squeeze`/`vs_3bet`/`vs_4bet` entries exist and are tested in isolation
+  but aren't called from anywhere: every defending decision falls through
+  to G5 (full analysis, no tabulated verdict) instead of using them.
+  Flagged by automated PR review; deliberately not fixed inline here —
+  wiring five more branches into G1 plus a `pc ranges` subcommand is a
+  feature addition, not a local bug fix.
+- G2 (the ATT/DEF budget heuristic) can render a `confidence: "forced"`
+  verdict (typically a fold on an exhausted DEF budget) that a G3 equity
+  calculation, if run, would contradict — the cascade currently lets the
+  cheaper heuristic close the decision before the more expensive
+  calculation ever runs, with no cross-check between the two. Flagged by
+  automated PR review, and by the reviewer's own read it's a gate-ordering
+  *architecture* question (does G2's "budget exhausted" fold escalate to
+  G3 instead of forcing, or does it force but flag disagreement when G3
+  is calculable) — worth its own PR rather than a change bundled in here.
 
 ## Repo layout
 

@@ -239,13 +239,19 @@ def _enumerate_equity(pairs, board, remaining_deck, n_missing) -> EquityResult:
 
 def _monte_carlo_equity(pairs, board, remaining_deck, n_missing, iterations) -> EquityResult:
     weights = [a.weight * b.weight for a, b in pairs]
+    # Régression perf : `rng.choices(pairs, weights=weights, ...)` reconstruit
+    # `itertools.accumulate(weights)` -- O(len(pairs)) -- à CHAQUE itération.
+    # Pré-calculer les poids cumulés une fois et les passer via `cum_weights`
+    # évite ce recalcul répété (jusqu'à ~1,7M tuples pour une range vs range
+    # large, sur `iterations` tirages).
+    cum_weights = list(itertools.accumulate(weights))
     total_w = 0.0
     r1_w = 0.0
     r2_w = 0.0
     rng = random.Random(1234567)  # déterministe : le brief exige une mesure reproductible
 
     for _ in range(iterations):
-        a, b = rng.choices(pairs, weights=weights, k=1)[0]
+        a, b = rng.choices(pairs, cum_weights=cum_weights, k=1)[0]
         used = set(a.combo) | set(b.combo)
         pool = [c for c in remaining_deck if c not in used]
         extra = rng.sample(pool, n_missing) if n_missing else []

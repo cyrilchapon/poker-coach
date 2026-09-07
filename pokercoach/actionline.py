@@ -107,10 +107,16 @@ class PressureReplay:
         }
 
 
-def replay_pressure(state: HandState) -> PressureReplay:
+def replay_pressure(state: HandState, *, upto_street: str | None = None) -> PressureReplay:
     """Rejoue toute la main et attribue, à chaque mise/relance, un poids de
     pression au siège qui l'a placée (`spent`) et à tous les autres sièges
-    encore en lice sur cette rue à ce moment (`faced`)."""
+    encore en lice sur cette rue à ce moment (`faced`).
+
+    ``upto_street`` : borne le rejeu à cette rue incluse plutôt que jusqu'à
+    la rue courante de ``state`` -- utilisé par ``brief._narrow_through_history``
+    pour obtenir la pression réellement accumulée par un adversaire à chaque
+    étape du narrowing rue-par-rue, plutôt que de repartir d'un budget neuf
+    (0.0/0.0) à chaque rue comme avant ce correctif."""
     spent = {s.seat: 0.0 for s in state.seats}
     faced = {s.seat: 0.0 for s in state.seats}
 
@@ -139,6 +145,9 @@ def replay_pressure(state: HandState) -> PressureReplay:
                     if other != seat and other not in folded_or_out:
                         faced[other] += w
             contributed[seat] = amount
+
+        if street == upto_street:
+            break
 
     return PressureReplay(spent=spent, faced=faced)
 

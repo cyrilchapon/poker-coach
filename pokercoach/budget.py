@@ -78,6 +78,8 @@ class Budget:
             return "inf" if x == INF else round(x, 3)
         return {
             "att_base": fmt(self.att_base), "def_base": fmt(self.def_base),
+            "att_after_penalties": fmt(self.att_after_penalties),
+            "def_after_penalties": fmt(self.def_after_penalties),
             "att_remaining": fmt(self.att_remaining), "def_remaining": fmt(self.def_remaining),
             "viable_actions": self.viable_actions,
             "removed": self.removed,
@@ -237,7 +239,6 @@ def _apply_texture_penalties(att: float, deff: float, made: str, texture: Textur
     if made not in pair_family:
         return att, deff, notes
 
-    applied_flush = False
     if texture.suit == "four_plus_flush":
         node = mods["one_card_flush"]
         if made in ("nuts_high", "second_high"):
@@ -250,8 +251,7 @@ def _apply_texture_penalties(att: float, deff: float, made: str, texture: Textur
                 deff = max(0.0, deff + entry["levels"])
                 att = max(0.0, att + entry["levels"])
         notes.append("board 4+ couleur, hors couleur : pénalité sévère")
-        applied_flush = True
-    elif texture.suit == "three_flush" and not applied_flush:
+    elif texture.suit == "three_flush":
         node = mods["flush_possible_three_flush"]
         key = "high_card_classes_by_street" if made in ("nuts_high", "second_high") else "by_street"
         delta = node[key].get(street, 0.0)

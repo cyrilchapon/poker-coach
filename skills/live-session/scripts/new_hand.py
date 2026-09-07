@@ -8,10 +8,14 @@ README, section "Session/multi-hand tooling".
 
 Répartition du pot : ``--winner SEAT`` (un seul gagnant, y compris pot non
 disputé) ou ``--split SEAT1,SEAT2,...`` (partage égal, ex égalité au
-showdown — le reliquat de jetons impairs va au premier siège listé).
-Side pots multiway non gérés (simplification connue) : si plusieurs
-gagnants n'ont pas misé le même montant sur la main, répartir à la main et
-ajuster le stack en éditant le hand.json produit.
+showdown). Les montants manipulés ici sont des floats sans unité de jeton
+minimale imposée par le reste du moteur -- le partage est une division
+exacte, pas de reliquat à gérer. Side pots multiway non gérés
+(simplification connue) : si plusieurs gagnants n'ont pas misé le même
+montant sur la main, répartir à la main et ajuster le stack en éditant le
+hand.json produit. ``--winner``/``--split`` ne peuvent désigner qu'un siège
+qui était encore en lice (actif ou all-in) à la fin de la main précédente —
+un siège foldé ne peut pas être déclaré gagnant.
 
 Bust du Héros = fin de session, jamais de recharge silencieuse (règle
 produit v1 préservée) : si le nouveau stack du Héros est <= 0, ce script
@@ -42,17 +46,25 @@ def build_next_hand(raw: dict, *, winners: list[int]) -> dict:
     state = validate_and_load(raw)
     n = state.n_seats
 
+    # Seul un siège encore EN LICE (actif ou all-in) à la fin de la main
+    # précédente peut être déclaré gagnant -- un siège foldé n'a jamais pu
+    # remporter ce pot, quelle que soit sa position dans state.seats.
+    eligible_winners = {s.seat for s in state.seats if s.status in ("active", "allin")}
+    invalid = [w for w in winners if w not in eligible_winners]
+    if invalid:
+        raise StateError(
+            f"siège(s) gagnant(s) invalide(s) : {invalid} — foldé(s) ou hors de la main, "
+            f"seuls {sorted(eligible_winners)} étaient encore en lice"
+        )
+
     pot_total = sum(s.stack - remaining_stack(state, s.seat) for s in state.seats)
     share = pot_total / len(winners)
-    remainder = round(pot_total - share * len(winners), 6)
 
     new_stacks: dict[int, float] = {}
     for s in state.seats:
         new_stacks[s.seat] = remaining_stack(state, s.seat)
-    for i, w in enumerate(winners):
-        if w not in new_stacks:
-            raise StateError(f"siège gagnant invalide : {w}")
-        new_stacks[w] += share + (remainder if i == 0 else 0.0)
+    for w in winners:
+        new_stacks[w] += share
 
     hero_seat = state.hero_seat
     if new_stacks[hero_seat] <= 0:
@@ -89,10 +101,26 @@ def build_next_hand(raw: dict, *, winners: list[int]) -> dict:
             f"n'est plus actif (bust) — la table a rétréci, ajuster button_seat/les "
             f"blindes à la main (règles de dead button non gérées par ce script)"
         )
+    # Régression : `table.ante` était reconduit d'une main à l'autre mais
+    # jamais réellement posté -- le pot était sous-évalué à chaque main dès
+    # qu'une ante était configurée. Chaque siège encore actif la poste (ante
+    # "par joueur" classique ; pas de convention "big blind ante" ici).
+    # ``amount`` sur une action est le montant TOTAL investi sur la rue par
+    # ce siège (cf. state.py) -- pour SB/BB, l'ante se fond donc dans LEUR
+    # unique action "post" plutôt que d'en émettre une seconde qui
+    # écraserait la première (street_contribution ne prend que la dernière
+    # action par siège, elle ne les somme pas).
+    ante = round(state.ante, 4) if state.ante > 0 else 0.0
     preflop_actions = [
-        {"seat": sb_seat, "action": "post", "amount": round(big_blind / 2, 4)},
-        {"seat": bb_seat, "action": "post", "amount": big_blind},
+        {"seat": sb_seat, "action": "post", "amount": round(big_blind / 2 + ante, 4)},
+        {"seat": bb_seat, "action": "post", "amount": round(big_blind + ante, 4)},
     ]
+    if ante > 0:
+        preflop_actions.extend(
+            {"seat": s["seat"], "action": "post", "amount": ante}
+            for s in new_seats
+            if s["status"] == "active" and s["seat"] not in (sb_seat, bb_seat)
+        )
 
     order = preflop_acting_order_offsets(n)
     active_by_offset = {

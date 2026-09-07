@@ -205,47 +205,132 @@ def cmd_glossary(args: argparse.Namespace) -> dict[str, Any]:
 # --- apply ---------------------------------------------------------------
 
 _SHORTHAND = {"f": "fold", "x": "check", "c": "call", "b": "bet", "r": "raise", "a": "allin"}
+_EPS = 1e-6
+
+
+def _min_raise_increment(state) -> float:
+    """Incrément minimal d'une mise/relance sur la rue courante : au moins
+    la BB (mise d'ouverture minimale), ou l'incrément de la dernière
+    mise/relance déjà posée sur cette rue si plus grand (règle NLHE
+    standard — une relance doit au moins égaler la taille de la
+    précédente)."""
+    node = state.streets[state.street]
+    contributed: dict[int, float] = {}
+    max_increment = 0.0
+    for act in node["actions"]:
+        seat, a, amt = act["seat"], act["action"], float(act.get("amount", 0.0))
+        if a in ("bet", "raise", "allin"):
+            inc = amt - contributed.get(seat, 0.0)
+            max_increment = max(max_increment, inc)
+        contributed[seat] = amt
+    return max(state.big_blind, max_increment)
+
+
+def _validate_apply_action(state, action: str, amount: float, *, already_in: float,
+                            to_call_amt: float, stack_cap: float) -> None:
+    """Contrôle de légalité ET de montant AVANT toute écriture — le contrat
+    de ``state.py`` est "jamais de correction silencieuse". Lève
+    ``StateError`` (jamais n'écrit un état incohérent sur disque)."""
+    if action == "check" and to_call_amt > _EPS:
+        raise StateError(f'"check" illégal : {to_call_amt:g} à suivre — utiliser "call"/"c" ou "fold"/"f"')
+    if action == "call" and to_call_amt <= _EPS:
+        raise StateError('"call" illégal : rien à suivre — utiliser "check"/"x"')
+    if action == "bet" and to_call_amt > _EPS:
+        raise StateError(f'"bet" illégal : {to_call_amt:g} à suivre déjà — utiliser "raise"/"r"')
+    if action == "raise" and to_call_amt <= _EPS:
+        raise StateError('"raise" illégal : rien à suivre — utiliser "bet"/"b"')
+
+    if action in ("check", "call", "fold"):
+        expected = already_in if action != "call" else already_in + to_call_amt
+        if abs(amount - expected) > _EPS:
+            raise StateError(
+                f'montant incohérent pour "{action}" : {amount:g} donné, {expected:g} attendu '
+                "(ces actions ont un montant déterminé par l'état, pas un choix libre)"
+            )
+    elif action == "allin":
+        expected = already_in + stack_cap
+        if abs(amount - expected) > _EPS:
+            raise StateError(
+                f'montant incohérent pour "allin" : {amount:g} donné, {expected:g} attendu '
+                "(le tapis complet du siège, pas un choix libre)"
+            )
+    elif action in ("bet", "raise"):
+        min_amount = already_in + (to_call_amt if action == "raise" else 0.0) + _min_raise_increment(state)
+        max_amount = already_in + stack_cap
+        if amount > max_amount + _EPS:
+            raise StateError(
+                f'montant "{action}" {amount:g} dépasse le tapis disponible ({max_amount:g}) — '
+                'utiliser "allin"/"a" pour miser tout le tapis'
+            )
+        if amount < min_amount - _EPS:
+            raise StateError(
+                f'montant "{action}" {amount:g} sous le minimum légal ({min_amount:g})'
+            )
 
 
 def cmd_apply(args: argparse.Namespace) -> dict[str, Any]:
-    from .state import street_contribution, to_call as compute_to_call
+    from .state import remaining_stack, street_contribution, to_call as compute_to_call
 
     raw = _load_hand_json(args.hand)
     state = validate_and_load(raw)
     parts = args.action.strip().split()
     code = parts[0].lower()
     action = _SHORTHAND.get(code, code)
+    if action not in _SHORTHAND.values():
+        raise StateError(f'action inconnue : {code!r} (attendu f/x/c/b/r/a ou leur forme longue)')
+
     already_in = street_contribution(state, state.street, state.to_act)
+    to_call_amt = compute_to_call(state)
+    stack_cap = remaining_stack(state, state.to_act)
 
     if len(parts) > 1:
         amount = float(parts[1])
     elif action == "call":
-        amount = already_in + compute_to_call(state)
-    elif action == "check":
+        amount = already_in + to_call_amt
+    elif action in ("check", "fold"):
         amount = already_in
-    elif action == "fold":
-        amount = already_in  # convention v1 : fold affiche quand même le montant engagé
     elif action == "allin":
-        from .state import remaining_stack
-        amount = already_in + remaining_stack(state, state.to_act)
+        amount = already_in + stack_cap
     else:
         raise StateError(f'montant requis pour "{action}" : ex "b 5.5", "r 12"')
+
+    _validate_apply_action(state, action, amount, already_in=already_in,
+                            to_call_amt=to_call_amt, stack_cap=stack_cap)
 
     node = raw["streets"][state.street]
     node["actions"].append({"seat": state.to_act, "action": action, "amount": amount})
 
     if action == "fold":
         raw["seats"][state.to_act]["status"] = "folded"
+    elif action == "allin":
+        raw["seats"][state.to_act]["status"] = "allin"
     n = state.n_seats
     order = [(state.to_act + i) % n for i in range(1, n + 1)]
     next_seat = next((s for s in order if raw["seats"][s]["status"] == "active"), None)
     if next_seat is not None:
         raw["to_act"] = next_seat
 
-    with open(args.hand, "w", encoding="utf-8") as f:
-        json.dump(raw, f, ensure_ascii=False, indent=2)
+    # Valider AVANT d'écrire : si le nouvel état est incohérent, l'erreur
+    # remonte sans qu'aucun octet n'ait touché le disque. Écriture atomique
+    # (fichier temporaire + os.replace) pour ne jamais laisser un fichier
+    # tronqué en cas d'interruption pendant l'écriture elle-même.
+    result = derive(validate_and_load(raw)).to_json()
 
-    return derive(validate_and_load(raw)).to_json()
+    import os
+    import tempfile
+
+    dir_ = os.path.dirname(os.path.abspath(args.hand)) or "."
+    fd, tmp_path = tempfile.mkstemp(dir=dir_, prefix=".hand-", suffix=".json.tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(raw, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, args.hand)
+    except BaseException:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        raise
+
+    return result
 
 
 # --- dispatch ------------------------------------------------------------
