@@ -148,7 +148,19 @@ the 124 tests passing at the time). The four ⛔ blocking findings in
   remaining card counted as an "out" (e.g. 47/47 on a flop). Fixed by
   comparing `handtype(evaluate(...))` category instead — an out is now a
   card that changes hand *category* (pair → two pair, draw → made hand),
-  matching what "outs" means at the table.
+  matching what "outs" means at the table. **Round 2** (caught on
+  re-review of the round-1 fix): the category comparison alone still
+  counted cards whose entire contribution is pairing an existing board
+  rank hero has no stake in (e.g. on `2♠5♠9♦` with A♠K♠, a 2/5/9 changes
+  hero's category exactly as much as it would for any random hand — the
+  board pairing for everyone isn't a hero-specific out). Fixed by
+  requiring hero's resulting category to beat what a *neutral* hand (two
+  cards chosen to avoid any rank/suit interaction with hero, the board, or
+  the candidate) would get from the same card — deliberately not the
+  simpler "exclude any card whose rank is already on the board" rule,
+  which would have also excluded a card completing hero's flush merely
+  because its rank happens to coincide with an existing board rank.
+  Verified identical on both the eval7 and pure-Python fallback backends.
 - `_classify_pair_family` indexed into `matched[0]` without sorting it
   first, so on a board already paired (both hole cards each matching a
   different board rank) the classification depended on the *input order*
@@ -260,6 +272,27 @@ Still open:
   *architecture* question (does G2's "budget exhausted" fold escalate to
   G3 instead of forcing, or does it force but flag disagreement when G3
   is calculable) — worth its own PR rather than a change bundled in here.
+  On re-review after the narrowing fix below, the reviewer's own
+  reproduction stopped demonstrating a contradiction — but only because
+  G3's bounds collapsed to `[0.0, 0.0]` on that spot (see next item), not
+  because the gates now agree for a good reason. Tackle this one *after*
+  the range-model item below, not before: a G3 that always says "fold"
+  can't meaningfully contradict G2 either way.
+- `ranges/narrow.py`'s per-street filtering (`action in b.viable_actions`)
+  has no way to represent a plausible bluff — as pressure accumulates
+  across streets, only the strongest hand classes keep a nonzero ATT/DEF
+  budget, so a villain range narrowed through a few streets of betting
+  converges toward "100% value, 0% bluffs" (verified: a 3-barrel river
+  spot narrowed to 100% sets/two-pair, both wide and narrow seeds,
+  producing degenerate G3 bounds of exactly `[0.0, 0.0]`). Flagged by
+  automated PR review. Combined with the already-known "criterion too
+  loose" issue (a `trash`-classified combo still has nonzero base ATT, so
+  early-street narrowing barely filters anything — 97.6% of combos
+  retained on a `call` in one measurement), the practical conclusion is
+  that G3's equity bounds shouldn't be treated as a reliable signal today,
+  on any street. Needs an explicit bluff-retention mechanism (e.g. a floor
+  on weak combos under high pressure, or weighting instead of a binary
+  keep/drop), which is a range-model design question, not a wiring fix.
 
 ## Repo layout
 
