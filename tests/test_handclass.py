@@ -150,7 +150,11 @@ def test_outs_counts_category_jumps_not_raw_score_improvements():
     # CATEGORY. Comparing handtype() category instead gives a sane count:
     # KdQs on Kh7c2d (top pair) jumps to Two Pair or Trips on a Q (3), a K
     # (2), a 7 (board pairs -> two pair K+77, 3) or a 2 (board pairs -> two
-    # pair K+22, 3) = 11 category-jumping cards -- nowhere near 47.
+    # pair K+22, 3) = 11 category-jumping cards -- nowhere near 47. All 11
+    # survive the round-2 "hero-specific" filter too (see below): hero
+    # already holds top pair Kings, so his resulting Two Pair/Trips beats
+    # what a neutral hand would get from the same card, unlike round-2's
+    # cases where hero holds nothing relevant to the pairing rank.
     r = H(["K♦", "Q♠"], ["K♥", "7♣", "2♦"])
     assert r.made == "top_pair"
     assert r.outs == 11
@@ -159,10 +163,42 @@ def test_outs_counts_category_jumps_not_raw_score_improvements():
 def test_outs_ghost_flush_draw_no_longer_inflates_count():
     # AsKs on 2s5s9d (a real flush draw: 4 spades between hole+board) used to
     # report outs=47; category-based counting keeps it sane (well under the
-    # full remaining deck), even counting every card that pairs the board.
+    # full remaining deck).
     r = H(["A♠", "K♠"], ["2♠", "5♠", "9♦"])
     assert r.outs is not None
     assert r.outs < 30
+
+
+def test_outs_excludes_board_pairs_hero_has_no_stake_in():
+    # Round-2 regression (caught by re-review of the round-1 fix): a card
+    # that pairs an EXISTING board rank hero holds no stake in (e.g. 2s5s9d,
+    # hero A-K) changes hero's category (High Card -> Pair) exactly as much
+    # as it would for ANY random hand -- that's not a hero-specific out,
+    # it's the board pairing for everyone. Filtered by comparing hero's
+    # resulting category against what a neutral (unrelated) hand would get
+    # from the same card: 2s/2h/2d/2c, 5s/5h/5d/5c and 9d/9h/9c/9s (9 cards,
+    # minus the ones already known) all fail that test here.
+    r = H(["A♠", "K♠"], ["2♠", "5♠", "9♦"])
+    assert r.outs == 15  # 23 category-jumping cards, 8 are pure board pairs
+
+
+def test_outs_keeps_a_flush_completion_that_happens_to_share_a_board_rank():
+    # Round-2 regression: a naive "exclude any card whose RANK already
+    # appears on the board" rule (the obvious first attempt at the fix
+    # above) would wrongly exclude 9s here -- its rank (9) matches the
+    # board's 9d, but what actually makes it an out is completing hero's
+    # spade flush, which a neutral hand holding no spades would NOT get.
+    # The category comparison (hero's Flush vs a neutral hand's Pair on the
+    # same card) correctly keeps it.
+    r = H(["A♠", "K♠"], ["2♠", "5♠", "9♦"])
+    hole = ["A♠", "K♠"]
+    from pokercoach.cards import parse_cards
+    from pokercoach.handeval import evaluate, handtype
+    nine_spades_hand = parse_cards(hole) + parse_cards(["2♠", "5♠", "9♦", "9♠"])
+    assert handtype(evaluate(nine_spades_hand)) == "Flush"
+    # and it must be reflected in the final outs count (see the 15 above,
+    # which is 23 - 8, not 23 - 9 -- the naive rule would have given 14).
+    assert r.outs == 15
 
 
 def test_pair_family_classification_is_independent_of_hole_card_order():

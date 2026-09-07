@@ -387,21 +387,68 @@ def _classify_draw(hole: list[Card], board: list[Card], texture: Texture) -> tup
 
 # --- Outs et blockers ---------------------------------------------------------
 
+def _neutral_filler(exclude_ranks: set[str], board: list[Card]) -> list[Card]:
+    """Deux cartes de référence, choisies pour n'interagir avec RIEN de
+    pertinent (rangs de ``exclude_ranks`` — main du héros, board, carte
+    candidate — évités ; suits les moins présentes au board privilégiées
+    pour ne pas fabriquer un tirage couleur accidentel ; rangs écartés l'un
+    de l'autre pour ne pas fabriquer une quinte accidentelle). Sert à
+    mesurer ce qu'une main GÉNÉRIQUE gagnerait de la carte candidate, pour
+    isoler ce que le héros gagne SPÉCIFIQUEMENT (cf. _count_outs)."""
+    board_suit_counts: dict[str, int] = {}
+    for c in board:
+        board_suit_counts[c.suit] = board_suit_counts.get(c.suit, 0) + 1
+    suits_by_rarity = sorted({c.suit for c in FULL_DECK}, key=lambda s: board_suit_counts.get(s, 0))
+    pool = [c for c in FULL_DECK if c.rank not in exclude_ranks]
+
+    for s1 in suits_by_rarity:
+        for s2 in suits_by_rarity:
+            if s1 == s2:
+                continue
+            cands1 = sorted((c for c in pool if c.suit == s1), key=lambda c: c.rank_index)
+            cands2 = sorted((c for c in pool if c.suit == s2), key=lambda c: c.rank_index)
+            for a in cands1:
+                for b in cands2:
+                    if a.rank != b.rank and abs(a.rank_index - b.rank_index) >= 4:
+                        return [a, b]
+    return pool[:2]  # repli improbable (deck presque épuisé)
+
+
 def _count_outs(hole: list[Card], board: list[Card]) -> int:
-    # Régression : comparer le score BRUT (`evaluate(...) > current`) comptait
-    # presque toutes les cartes restantes comme "out", parce qu'ajouter une
-    # 6e/7e carte connue améliore quasi toujours légèrement le meilleur-5-de-N
-    # (elle remplace le kicker le plus faible) même sans changer la NATURE de
-    # la main. Un "out" au sens poker, c'est une carte qui fait changer de
-    # CATÉGORIE (paire -> deux paires, tirage -> couleur, etc.), pas une carte
-    # qui améliore juste un kicker à catégorie égale.
+    # Régression (round 1) : comparer le score BRUT (`evaluate(...) > current`)
+    # comptait presque toutes les cartes restantes comme "out", parce
+    # qu'ajouter une 6e/7e carte connue améliore quasi toujours légèrement le
+    # meilleur-5-de-N (elle remplace le kicker le plus faible) même sans
+    # changer la NATURE de la main. Comparer la CATÉGORIE (paire -> deux
+    # paires, tirage -> couleur, etc.) a corrigé l'essentiel, mais pas tout :
+    #
+    # Régression (round 2) : une carte qui appareille le board SANS toucher
+    # aux cartes du héros fait changer de catégorie N'IMPORTE QUELLE main
+    # (paire de 2 au flop 2-5-9 : tout le monde a la paire) -- ce n'est pas
+    # un avantage SPÉCIFIQUE au héros, donc pas un vrai out. Pour l'exclure
+    # sans braquer les tirages couleur/quinte légitimes (une carte peut à la
+    # fois appareiller un rang du board ET compléter la couleur du héros --
+    # ex. le 9♠ qui complète une couleur sur un board 2♠5♠9♦ : exclure par
+    # simple rang casserait ce cas), on compare la catégorie obtenue par le
+    # héros à celle qu'obtiendrait une main NEUTRE (sans rapport avec le
+    # héros ni le board) recevant la même carte : si le héros ne fait pas
+    # MIEUX qu'une main neutre, ce n'est pas un out qui lui est propre.
     current_category_idx = HAND_CATEGORIES.index(handtype(evaluate(hole + board)))
     known = set(hole) | set(board)
     remaining = [c for c in FULL_DECK if c not in known]
-    return sum(
-        1 for c in remaining
-        if HAND_CATEGORIES.index(handtype(evaluate(hole + board + [c]))) > current_category_idx
-    )
+
+    outs = 0
+    for c in remaining:
+        hero_idx = HAND_CATEGORIES.index(handtype(evaluate(hole + board + [c])))
+        if hero_idx <= current_category_idx:
+            continue
+        exclude_ranks = {card.rank for card in hole} | {card.rank for card in board} | {c.rank}
+        neutral = _neutral_filler(exclude_ranks, board)
+        neutral_idx = HAND_CATEGORIES.index(handtype(evaluate(neutral + board + [c])))
+        if hero_idx <= neutral_idx:
+            continue  # amélioration générique (ex. le board s'apparie) -- pas spécifique au héros
+        outs += 1
+    return outs
 
 
 def _blockers(hole: list[Card], board: list[Card], texture: Texture) -> list[str]:
