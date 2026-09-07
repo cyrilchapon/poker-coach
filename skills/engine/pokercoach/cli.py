@@ -232,7 +232,8 @@ def cmd_render(args: argparse.Namespace) -> dict[str, Any]:
         for act in node["actions"]:
             if act["seat"] == seat.seat:
                 action, amount = act["action"], act.get("amount")
-        d: dict[str, Any] = {"stack": round(seat.stack, 2), "action": action, "amount": amount}
+        d: dict[str, Any] = {"stack": round(seat.stack, 2), "action": action, "amount": amount,
+                              "status": seat.status}
         if seat.archetype:
             d["archetype"] = seat.archetype
         if seat.cards:

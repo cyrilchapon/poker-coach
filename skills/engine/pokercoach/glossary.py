@@ -36,6 +36,8 @@ TERMS: dict[str, str] = {
     "bubble factor": "facteur de risque accru en approche de bulle de tournoi (ICM), resserre les ranges de call.",
     "n_behind": "nombre de joueurs qui doivent encore parler derrière soi au premier tour préflop.",
     "ip_postflop": "sera-t-on en position après le flop contre le caller le plus probable (booléen).",
+    "implied odds": "cotes du pot ajustées par les mises futures qu'on peut encore extraire si le tirage touche -- rend rentable un call que les seules cotes actuelles du pot ne justifient pas. Facteur qualitatif (skill decision-factors, gate G5) : pas modélisé dans le budget ATT/DEF chiffré (att-def-budgets.yaml), qui ignore ce à quoi ressemblera la mise suivante.",
+    "reverse implied odds": "l'inverse des implied odds : une main qui touche mais reste derrière (ex. top pair petit kicker qui bat un kicker faible mais perd contre un meilleur) -- l'équité brute surestime alors sa vraie valeur, car payer expose à perdre un pot plus gros ensuite.",
     "att": "budget d'agression : cumul de rues pondérées qu'une classe de main peut encore financer.",
     "def": "budget de défense : cumul de mises pondérées qu'une classe de main peut encore payer.",
     "tptk": "Top Pair Top Kicker : paire avec la carte la plus haute du board et le meilleur kicker possible.",

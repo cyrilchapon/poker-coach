@@ -15,7 +15,7 @@ scripts/pc glossary "pot odds"
 scripts/pc glossary blocker
 ```
 
-Retourne une définition d'une phrase (quarante caractères, pas 5,9 ko). Termes disponibles : range, combo, équité, EV, pot odds, SPR, MDF, blocker, range polarisée/linéaire/condensée, range advantage, nut advantage, c-bet, 3bet, 4bet, squeeze, iso-raise, GTO, exploit, ICM, bubble factor, n_behind, ip_postflop, ATT, DEF, TPTK, gate.
+Retourne une définition d'une phrase (quarante caractères, pas 5,9 ko). Termes disponibles : range, combo, équité, EV, pot odds, implied odds, reverse implied odds, SPR, MDF, blocker, range polarisée/linéaire/condensée, range advantage, nut advantage, c-bet, 3bet, 4bet, squeeze, iso-raise, GTO, exploit, ICM, bubble factor, n_behind, ip_postflop, ATT, DEF, TPTK, gate.
 
 ## Règle d'usage (inchangée)
 

@@ -440,6 +440,46 @@ Still open:
   suggests). Fine as the basis for `top_pct_range()`'s approximate slicing,
   not a substitute for real range construction.
 
+## Live-session test report: findings and fixes
+
+A quick real-session test surfaced four issues. Two were clear bugs, fixed
+and covered by a new regression test each; two were genuine gaps in what
+the engine models, documented rather than papered over with an unreviewed
+threshold:
+
+- **`pc render` dropped `seat.status`, so a folded seat became invisible
+  once play moved to the next street.** `cmd_render`'s `seat_dict()` never
+  passed `status` through at all, and a seat's `action` only ever reflects
+  the CURRENT street's actions — a seat that folded on the flop has no
+  action to show on the turn, making it indistinguishable from a seat that
+  simply hasn't acted yet. Fixed: `seat_dict()` now includes `status`, and
+  `render()` falls back to `"fold"` for a seat with no action on the street
+  being drawn but `status == "folded"`.
+- **The GTO glossary had no entry for implied odds or reverse implied
+  odds**, despite both terms being used directly by the `decision-factors`
+  skill (loaded by gate G5). Added both definitions to `glossary.py` and to
+  the term list in `gto-glossary/SKILL.md`.
+- **`att-def-budgets.yaml` has no implied-odds term at all** — the DEF
+  budget of a draw is only ever the pressure already faced, never what a
+  completed draw could still extract from (or lose to) the remaining
+  stacks. This is exactly where a DEF-exhausted fold is most likely to be
+  too conservative: a draw, multiway, against opponents who pay wide. The
+  gate threshold itself is a user-owned cursor (see `gates.py`'s own
+  docstring on this) and wasn't changed without real session data to
+  calibrate it — but `budget.compute()` now attaches a note to exactly this
+  situation (draw + DEF-exhausted fold + 2+ active opponents) so the coach
+  surfaces the gap instead of handing back a bare "budget insuffisant".
+- **`hand.outs` counts real category-jumping cards, not equity-weighted
+  ones — it has no notion of a dead or poisoned out.** On the reported
+  spot (an open-ended draw plus a pairing card on a three-flush board,
+  multiway) the count included cards that also complete a made hand for an
+  opponent's range, or that pair a rank without actually giving the best
+  hand. Distinguishing those requires reasoning about the opponents'
+  ranges, which is out of scope for a mechanical count over the known
+  cards alone — `handclass.py`'s docstring now says so explicitly, so
+  `outs` isn't mistaken for an equity-adjusted number. Judging live-outs
+  quality stays a G5/`decision-factors` job.
+
 ## Repo layout
 
 ```

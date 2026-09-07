@@ -209,10 +209,37 @@ def test_cli_apply_rejects_amount_mismatch_for_deterministic_actions(capsys, tmp
     assert p.read_text() == original
 
 
+def test_cli_render_seat_status_and_folded_seat_stays_visible_on_next_street(capsys):
+    # Regression: cmd_render's seat_dict() dropped seat.status entirely, and
+    # a folded seat's "action" only comes from the CURRENT street's actions
+    # -- once play moves to the next street, a seat that folded earlier has
+    # no action to show there and became indistinguishable from a seat that
+    # simply hasn't acted yet. render() now falls back to "fold" from
+    # status when a seat has no action on the street being drawn.
+    hand = str(FIXTURES / "three_way_fold_then_turn.json")
+    code, out, err = run(["render", "--hand", hand], capsys)
+    assert code == 0, err
+    ascii_art = json.loads(out)["ascii"]
+    assert "fold" in ascii_art
+
+
 def test_cli_glossary_unknown_term_errors(capsys):
     code, out, err = run(["glossary", "not-a-real-term"], capsys)
     assert code == 1
     assert "inconnu" in err
+
+
+def test_cli_glossary_has_implied_and_reverse_implied_odds(capsys):
+    # Regression: the glossary covered pot odds but not implied/reverse
+    # implied odds, even though decision-factors (loaded by gate G5) uses
+    # both terms directly.
+    code, out, err = run(["glossary", "implied odds"], capsys)
+    assert code == 0, err
+    assert "cotes du pot" in json.loads(out)["definition"]
+
+    code, out, err = run(["glossary", "reverse implied odds"], capsys)
+    assert code == 0, err
+    assert "kicker" in json.loads(out)["definition"]
 
 
 def test_cli_showdown(capsys):
