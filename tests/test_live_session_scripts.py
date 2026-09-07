@@ -3,11 +3,14 @@ volontairement HORS du package pokercoach — importés ici par chemin de fichie
 import copy
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
 
+import eval7
 import pytest
+import yaml
 
 from pokercoach.state import StateError, validate_and_load
 
@@ -59,6 +62,39 @@ def test_advance_street_documented_subprocess_invocation_actually_works(tmp_path
 
     updated = json.loads(hand_path.read_text(encoding="utf-8"))
     assert updated["streets"]["turn"]["board"] == ["T♠", "9♥", "2♣", "5♦"]
+
+
+def test_advance_street_works_without_pokercoach_pip_installed(tmp_path):
+    # Regression for the claude.ai deployment failure: each skill ships as an
+    # isolated directory there, with no `pip install -e .` and no repo root
+    # in sight -- `pokercoach` is never importable "for free" the way it is
+    # in a dev checkout. `pc_bootstrap.ensure_pokercoach_on_path()` (imported
+    # at the top of this script) is what's supposed to find it anyway.
+    #
+    # Simulated here with `-S` (skip site initialization, so the editable
+    # install's .pth-registered finder never runs) plus a PYTHONPATH limited
+    # to eval7/PyYAML's own directories (real third-party deps `pokercoach`
+    # needs, present in any real deployment, but deliberately NOT including
+    # wherever `pokercoach` itself would be registered).
+    raw = load_fixture("hu_flop_cbet.json")
+    raw = copy.deepcopy(raw)
+    raw["streets"]["flop"]["actions"].append({"seat": 0, "action": "call", "amount": 4.0})
+    hand_path = tmp_path / "hand.json"
+    hand_path.write_text(json.dumps(raw), encoding="utf-8")
+
+    third_party_dirs = os.pathsep.join(
+        os.path.dirname(os.path.dirname(mod.__file__)) for mod in (yaml, eval7)
+    )
+    env = {"PATH": os.environ.get("PATH", ""), "PYTHONPATH": third_party_dirs}
+
+    result = subprocess.run(
+        [sys.executable, "-S", str(SCRIPTS_DIR / "advance_street.py"),
+         "--hand", str(hand_path), "--deal", "5♦"],
+        cwd=str(tmp_path), env=env, capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    derived = json.loads(result.stdout)
+    assert derived["street"] == "turn"
 
 
 # --- advance_street.py ------------------------------------------------------

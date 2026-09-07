@@ -12,13 +12,14 @@ The guiding principle:
 Everything deterministic — pot, odds, MDF, hand classification, board
 texture, the ATT/DEF aggression/defense budget, equity, ranges — moves out of
 the LLM's reasoning and into a scripted Python engine with structured
-input/output (the `pokercoach` package, CLI entry point `pc`). The LLM is
-left with grey-zone judgment and pedagogy: the 11 skills in `skills/` are
+input/output (the `pokercoach` package, CLI entry point `pc`, packaged in
+the `engine` skill — see "Engine packaging" below). The LLM is left with
+grey-zone judgment and pedagogy: the 11 coaching skills in `skills/` are
 thin wrappers around `pc`.
 
 ## Status
 
-The full staged plan in [`docs/brief/PROMPT.md`](docs/brief/PROMPT.md) §7 is
+The full staged plan in [`skills/engine/docs/brief/PROMPT.md`](skills/engine/docs/brief/PROMPT.md) §7 is
 implemented:
 
 | Step | | |
@@ -38,7 +39,7 @@ sub-classification, `ranges/table.py`'s `vs_rfi`/`vs_limp`/`squeeze`/`vs_3bet`/
 `vs_4bet` formulas). None of it is exact solver output; all of it is
 documented as an approximation, consistent with the brief's own "honnêteté
 sur la précision" stance (see
-[`docs/brief/references/03-multiway-generalization.md`](docs/brief/references/03-multiway-generalization.md)).
+[`skills/engine/docs/brief/references/03-multiway-generalization.md`](skills/engine/docs/brief/references/03-multiway-generalization.md)).
 The `data/multiway-adjustment.yaml` coefficients are explicitly marked
 `status: proposition_non_calibree` — they're isolated in YAML precisely so
 they can be tuned after real sessions without touching code.
@@ -283,7 +284,7 @@ tabulated verdict). Two things were needed to wire them in for real:
   only ever produced a percentage + prose (`"~23.5% (top range du héros,
   largeur approximée)"`), not a parseable range, so there was nothing to
   check hand-membership against. Fixed by adding
-  [`data/hand-strength-ranking.yaml`](data/hand-strength-ranking.yaml) — the
+  [`skills/engine/data/hand-strength-ranking.yaml`](skills/engine/data/hand-strength-ranking.yaml) — the
   169 starting hand types ranked by raw equity vs. a fully random range,
   computed once via the existing equity engine (Monte Carlo, ~40s,
   deterministic seed) and frozen as static data — and
@@ -442,38 +443,77 @@ Still open:
 ## Repo layout
 
 ```
-pokercoach/            the engine — package `pokercoach`, CLI entry point `pc`
-  cli.py                  `pc` subcommands, JSON in/out, errors on stderr
-  state.py                canonical hand state: validation + derivations (Layer A)
-  cards.py                card parsing (unicode ♠♥♦♣ output, always)
-  handeval.py             eval7 wrapper (pure-Python fallback) + nut-check
-  handclass.py             the 23 hand classes, draws, outs, blockers
-  texture.py               board texture classification
-  actionline.py            pot type, role, weighted pressure (pressure-weights.yaml)
-  budget.py                ATT/DEF: base, texture penalties, multiway, exploit gate
-  equity.py                range vs range equity, enumeration/Monte Carlo, cache
-  ranges/table.py           RFI + derived scenarios (vs_rfi, vs_limp, squeeze, ...)
-  ranges/narrow.py          mechanical range narrowing by observed action
-  gates.py                  the G0-G5 cascade decision logic
-  brief.py                  orchestration -> the `pc brief` decision packet
-  render.py                 ASCII table rendering (HU -> 8-max, v1 conventions)
-  showdown.py               deterministic showdown resolution
-  sizing.py                 %pot / raise-to sizing math
-  glossary.py               `pc glossary <term>` lookup
-data/                   YAML tables the engine reads (ATT/DEF budgets, hand
-                        classes, pressure weights, texture modifiers, RFI
-                        ranges, multiway adjustments) — see data provenance
-                        below
-skills/                 the 11 SKILL.md skills, rewritten as thin CLI wrappers
+skills/                 the 12 skills (11 coaching skills + `engine`)
+  engine/                 the shared engine skill — see "Engine packaging" below
+    pokercoach/             the engine package, CLI entry point `pc`
+      cli.py                  `pc` subcommands, JSON in/out, errors on stderr
+      state.py                canonical hand state: validation + derivations (Layer A)
+      cards.py                card parsing (unicode ♠♥♦♣ output, always)
+      handeval.py             eval7 wrapper (pure-Python fallback) + nut-check
+      handclass.py             the 23 hand classes, draws, outs, blockers
+      texture.py               board texture classification
+      actionline.py            pot type, role, weighted pressure (pressure-weights.yaml)
+      budget.py                ATT/DEF: base, texture penalties, multiway, exploit gate
+      equity.py                range vs range equity, enumeration/Monte Carlo, cache
+      ranges/table.py           RFI + derived scenarios (vs_rfi, vs_limp, squeeze, ...)
+      ranges/narrow.py          mechanical range narrowing by observed action
+      gates.py                  the G0-G5 cascade decision logic
+      brief.py                  orchestration -> the `pc brief` decision packet
+      render.py                 ASCII table rendering (HU -> 8-max, v1 conventions)
+      showdown.py               deterministic showdown resolution
+      sizing.py                 %pot / raise-to sizing math
+      glossary.py               `pc glossary <term>` lookup
+    data/                   YAML tables the engine reads (ATT/DEF budgets, hand
+                            classes, pressure weights, texture modifiers, RFI
+                            ranges, multiway adjustments) — see data provenance
+                            below
+    docs/brief/             the v2 planning package this rewrite is built from:
+                            brief, architecture, analysis, audit, sources
+    scripts/pc, pc_bootstrap.py   canonical copies (see below)
+  <other-skill>/scripts/pc, pc_bootstrap.py   synced copies, see "Engine packaging"
   live-session/scripts/    session-only helpers (advance_street.py, new_hand.py) —
                            deliberately outside pokercoach/, see above
 tests/                  pytest suite for pokercoach/, with hand fixtures
-docs/brief/             the v2 planning package this rewrite is built from:
-                        brief, architecture, analysis, audit, sources
+scripts/sync_engine_bootstrap.py   (re)syncs scripts/pc + pc_bootstrap.py into
+                                    every skill that invokes `pc` — see below
 .claude-plugin/          plugin.json + marketplace.json — this repo is a single
                         Claude Code plugin that also serves as its own
                         marketplace (source: "./"), see Installing below
 ```
+
+## Engine packaging: one repo, two deployment shapes
+
+`pokercoach/`, `data/` and `docs/` live in a single place — the `engine`
+skill (`skills/engine/`) — not at the repo root. This matters because the
+two surfaces this plugin installs on don't give the same filesystem to a
+skill's scripts:
+
+- **Claude Code**: a plugin install is a full checkout of this repo. Once
+  `pip install -e .` has been run (see Development below), `pokercoach` is
+  importable from anywhere, `pc` is on PATH, and every skill can reach
+  `skills/engine/{pokercoach,data,docs}` directly.
+- **claude.ai**: each skill is deployed as its *own isolated directory*
+  (`/mnt/skills/plugins/<plugin>:<skill>/`) — there is no shared repo root,
+  no `pip install`, and nothing outside a skill's own directory is
+  guaranteed to exist. A skill that assumed `pokercoach` was globally
+  importable (as every skill here did, until this was diagnosed as a bug)
+  simply crashes there: `pc` doesn't exist, `import pokercoach` raises
+  `ModuleNotFoundError`.
+
+Every other skill carries a tiny, identical bootstrap (`scripts/pc`,
+`scripts/pc_bootstrap.py`) instead of its own copy of the engine. At
+runtime it locates the real engine — tries a plain `import pokercoach`
+first (Claude Code, or dev), then a full repo checkout nearby, then a
+sibling skill directory named `<plugin>:engine` (the claude.ai case) — and
+only then dispatches into `pokercoach.cli`. `pc paths` (a `pc` subcommand)
+resolves the absolute `pokercoach_dir`/`data_dir`/`docs_dir` for whichever
+deployment is currently running, for the few places a skill needs to read
+a YAML table or a doc directly rather than through a `pc` subcommand.
+
+The bootstrap files are generated, not hand-edited: change them only under
+`skills/engine/scripts/`, then run `python3 scripts/sync_engine_bootstrap.py`
+from the repo root and commit the result (`--check` mode, run in CI, fails
+the build if a copy has drifted).
 
 ## Installing
 
@@ -492,7 +532,10 @@ Browse plugins → Install.
 
 Note: claude.ai, Claude Code, and the API each maintain independent
 skill/plugin state — installing here on one surface doesn't install it on
-the others.
+the others. On claude.ai specifically, installing the plugin must bring in
+all 12 skills including `engine` — if a skill later reports it can't find
+`pokercoach`, check first that `engine` is still installed alongside it
+(see "Engine packaging" above, and `skills/engine/SKILL.md`).
 
 ## Data provenance
 
@@ -508,7 +551,7 @@ in Annexes D–E of:
 PokerSkill (which is heads-up only, with no opponent model) — they are
 regular-strength reference ranges and an uncalibrated first proposal for
 multiway/exploit adjustments, respectively. Both are marked as such in their
-own headers. Full attribution: [`docs/brief/references/05-sources.md`](docs/brief/references/05-sources.md).
+own headers. Full attribution: [`skills/engine/docs/brief/references/05-sources.md`](skills/engine/docs/brief/references/05-sources.md).
 
 ## Development
 

@@ -10,9 +10,9 @@ description: Glossaire du jargon standard des solveurs et de la théorie GTO en 
 En v1 ce fichier faisait ~5,9 ko et était chargé en entier dans le contexte, que la décision soit triviale ou non. En v2, le glossaire vit dans `pokercoach/glossary.py` et se consulte terme par terme :
 
 ```bash
-pc glossary MDF
-pc glossary "pot odds"
-pc glossary blocker
+scripts/pc glossary MDF
+scripts/pc glossary "pot odds"
+scripts/pc glossary blocker
 ```
 
 Retourne une définition d'une phrase (quarante caractères, pas 5,9 ko). Termes disponibles : range, combo, équité, EV, pot odds, SPR, MDF, blocker, range polarisée/linéaire/condensée, range advantage, nut advantage, c-bet, 3bet, 4bet, squeeze, iso-raise, GTO, exploit, ICM, bubble factor, n_behind, ip_postflop, ATT, DEF, TPTK, gate.

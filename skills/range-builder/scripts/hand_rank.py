@@ -9,16 +9,27 @@ combinatoires fins, et jeu postflop réel. À utiliser comme repère de
 calibration, pas comme verdict final — toujours le dire à l'utilisateur.
 
 v2 : réutilise le moteur `pokercoach.equity` (installé en package, `pip
-install -e .` à la racine du repo) au lieu d'une boucle Monte-Carlo dupliquée
-sur treys — résultat exact par énumération quand le volume le permet.
+install -e .` à la racine du repo — ou localisé sans installation par
+pc_bootstrap.py, voir plus bas, sur claude.ai où chaque skill est isolée)
+au lieu d'une boucle Monte-Carlo dupliquée sur treys — résultat exact par
+énumération quand le volume le permet.
 
 Usage :
     python3 hand_rank.py "AJo,ATo,A9o,A8o,A7o,A6o,A5o,A4o" "77+,ATs+,AJo+,KQs,KQo"
 """
-import argparse
+from __future__ import annotations
 
-from pokercoach.cards import parse_cards
-from pokercoach.equity import equity as compute_equity
+import argparse
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+from pc_bootstrap import ensure_pokercoach_on_path  # noqa: E402
+
+ensure_pokercoach_on_path()
+
+from pokercoach.cards import parse_cards  # noqa: E402
+from pokercoach.equity import equity as compute_equity  # noqa: E402
 
 
 def rank_hands(candidates: list[str], opp_range: str, board_str: str = "", iterations: int = 20000):

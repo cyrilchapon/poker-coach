@@ -39,7 +39,7 @@ Pour tout litige non couvert ci-dessus (angle shooting, dealer error, misdeal, j
 **Règle dure, sans exception, inchangée en v2** : toute affirmation sur le type/la force d'une main en cours, ou sur le nombre d'outs disponibles, passe par le moteur — jamais une évaluation manuelle, même quand la main semble évidente. Ça s'applique à chaque rue.
 
 ```bash
-pc hand --hand hand.json [--seat N]
+scripts/pc hand --hand hand.json [--seat N]
 ```
 
 Retourne la classe de main (les 23 classes, cf. `pc hand --help`), le tirage éventuel, les outs réels (flop/turn — `null` à la river) et les blockers. Accepte les deux notations de cartes en entrée dans `hand.json` (lettres ou unicode `♠♥♦♣`), sort toujours en unicode.

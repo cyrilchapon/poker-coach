@@ -23,6 +23,7 @@ dev = [
 pc = "pokercoach.cli:main"
 
 [tool.setuptools.packages.find]
+where = ["skills/engine"]
 include = ["pokercoach*"]
 
 [tool.pytest.ini_options]
