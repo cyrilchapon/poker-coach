@@ -267,6 +267,34 @@ def position_labels(state: HandState) -> dict[int, str]:
     }
 
 
+def preflop_acting_order_offsets(n: int) -> list[int]:
+    """Ordre de parole préflop, en écarts au bouton (0=BTN). UTG (ou
+    équivalent) parle en premier, la BB en dernier — cf.
+    docs/brief/references/03-multiway-generalization.md."""
+    if n == 2:
+        return [0, 1]  # BTN/SB agit en premier en HU, puis BB
+    return list(range(3, n)) + [0, 1, 2]
+
+
+def n_behind(state: HandState, seat: int) -> int:
+    """Nombre de joueurs qui doivent encore parler derrière ``seat`` au
+    premier tour de parole préflop (mesure STRUCTURELLE, indépendante des
+    folds déjà survenus — c'est la clé d'indexation des ranges, pas un
+    décompte en direct)."""
+    n = state.n_seats
+    offset = (seat - state.button_seat) % n
+    order = preflop_acting_order_offsets(n)
+    return len(order) - 1 - order.index(offset)
+
+
+def ip_postflop(state: HandState, seat: int) -> bool:
+    """Le héros sera-t-il en position après le flop contre le caller le plus
+    probable ? Simplifié en : ``seat`` est-il le bouton ? (le bouton est
+    toujours le dernier à parler postflop, quel que soit le format —
+    cf. 03-multiway-generalization.md, tableau de référence)."""
+    return seat == state.button_seat
+
+
 def street_contribution(state: HandState, street: str, seat: int) -> float:
     """Montant total investi par ``seat`` sur ``street`` (0 s'il n'a pas agi)."""
     node = state.streets.get(street)

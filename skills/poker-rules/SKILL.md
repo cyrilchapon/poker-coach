@@ -34,16 +34,15 @@ Pour tout litige non couvert ci-dessus (angle shooting, dealer error, misdeal, j
 
 ## Vérification obligatoire de toute affirmation sur une main — jamais à l'œil
 
-**Deux erreurs réelles constatées en session de test** : un tirage quinte annoncé avec seulement 4 cartes consécutives (il en faut 5 — impossible avec une seule carte à venir), et une main décrite comme "deux paires aux As" alors que la seule paire venait du board (la vraie main était juste "paire d'As, kickers"). Les deux fois, l'erreur a été commise en évaluant la main de tête.
+**Deux erreurs réelles constatées en session de test (v1)** : un tirage quinte annoncé avec seulement 4 cartes consécutives (il en faut 5), et une main décrite comme "deux paires aux As" alors que la seule paire venait du board. Les deux fois, l'erreur a été commise en évaluant la main de tête.
 
-**Règle dure, sans exception** : toute affirmation sur le type/la force d'une main en cours, ou sur le nombre d'outs disponibles, doit passer par `equity-engine/scripts/describe_hand.py` — jamais une évaluation manuelle, même quand la main semble évidente. Ça s'applique à **chaque rue**, pas seulement au showdown (qui a son propre outil, `showdown.py`, pour départager un abattage complet — `describe_hand.py` sert lui à qualifier une main *en cours de coup*, avant la fin).
+**Règle dure, sans exception, inchangée en v2** : toute affirmation sur le type/la force d'une main en cours, ou sur le nombre d'outs disponibles, passe par le moteur — jamais une évaluation manuelle, même quand la main semble évidente. Ça s'applique à chaque rue.
 
 ```bash
-python3 scripts/describe_hand.py "<main>" "<board>"                # type de main exact
-python3 scripts/describe_hand.py "<main>" "<board>" --outs          # + les vrais outs (flop ou turn uniquement)
+pc hand --hand hand.json [--seat N]
 ```
 
-Accepte indifféremment la notation lettres (`9d9h`) et Unicode (`9♦9♥`), y compris copiée directement depuis le rendu de `live-session`.
+Retourne la classe de main (les 23 classes, cf. `pc hand --help`), le tirage éventuel, les outs réels (flop/turn — `null` à la river) et les blockers. Accepte les deux notations de cartes en entrée dans `hand.json` (lettres ou unicode `♠♥♦♣`), sort toujours en unicode.
 
 ## Ce que cette skill NE couvre PAS
 

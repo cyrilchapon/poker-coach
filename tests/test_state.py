@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from pokercoach.state import StateError, derive, position_labels, validate_and_load
+from pokercoach.state import StateError, derive, ip_postflop, n_behind, position_labels, validate_and_load
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -168,6 +168,25 @@ def test_invalid_seat_numbering_is_rejected():
     raw["seats"][1]["seat"] = 5
     with pytest.raises(StateError):
         validate_and_load(raw)
+
+
+# --- n_behind / ip_postflop : contre le tableau de 03-multiway-generalization.md
+
+@pytest.mark.parametrize("n_seats,hero_offset,expected_n_behind,expected_ip", [
+    (8, 3, 7, False),  # UTG 8-max
+    (6, 3, 5, False),  # UTG 6-max
+    (6, 4, 4, False),  # HJ 6-max
+    (6, 5, 3, False),  # CO 6-max
+    (6, 0, 2, True),   # BTN 6-max
+    (6, 1, 1, False),  # SB 6-max
+    (2, 0, 1, True),   # BTN/SB heads-up
+])
+def test_n_behind_and_ip_postflop_match_reference_table(n_seats, hero_offset, expected_n_behind, expected_ip):
+    button_seat = 0
+    hero_seat = (button_seat + hero_offset) % n_seats
+    state = validate_and_load(minimal_hand(n_seats, button_seat=button_seat, hero_seat=hero_seat))
+    assert n_behind(state, hero_seat) == expected_n_behind
+    assert ip_postflop(state, hero_seat) == expected_ip
 
 
 def test_out_of_range_seat_count_is_rejected():

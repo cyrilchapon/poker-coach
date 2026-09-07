@@ -1,44 +1,46 @@
 ---
 name: equity-engine
-description: Calcul d'équité main vs range ou range vs range (Monte-Carlo), exécuté via le script Python fourni (scripts/equity.py, basé sur treys) dans le sandbox. À consulter dès qu'un calcul d'équité, de cotes d'appel, ou d'EV chiffrée est nécessaire — jamais estimer une équité "à l'oeil" quand ce script peut donner un chiffre exact.
+description: Calcul d'équité main vs range ou range vs range, exécuté via `pc equity` (backend eval7/pure-Python, énumération exhaustive ou Monte-Carlo). À consulter dès qu'un calcul d'équité, de cotes d'appel, ou d'EV chiffrée est nécessaire — jamais estimer une équité "à l'oeil" quand cette commande peut donner un chiffre exact.
 ---
 
 # Equity Engine
 
-## Prérequis (une fois par session sandbox)
+## v2 : plus de script à installer, un sous-programme du CLI `pc`
+
+Le moteur est du Python pur (module `pokercoach`, packagé), pas un script sandbox séparé — pas de `pip install` à refaire à chaque session.
 
 ```bash
-pip install treys --break-system-packages -q
+pc equity --hand hand.json --vs "<range>"                       # cartes exactes du héros vs une range
+pc equity --range1 "<range1>" --vs "<range2>" --board "..." --dead "..." --iterations 20000
 ```
 
-## Usage
+- `--range1` / `--vs` : notation `range-notation` (ex `"QQ+,AKs"`), y compris une main exacte (`AsKd`) et la pondération `@xx%` — les deux limitations connues de la v1 sont levées.
+- `--board` / `--dead` : cartes séparées par des virgules (ex `"Ah,7c,2d"`), vides si non pertinent.
+- `--iterations` : Monte-Carlo seulement (voir méthode ci-dessous), 20000 par défaut.
 
-```bash
-python3 scripts/equity.py "<range1>" "<range2>" --board "<board>" --dead "<dead>" --iters 20000
-```
+Sortie : `{"range1_equity": ..., "range2_equity": ..., "method": "enumeration"|"monte_carlo", "iterations": ..., "combos_used": ...}`.
 
-**Pour qualifier une main en cours (type de main, outs réels) plutôt que comparer deux ranges**, utiliser `scripts/describe_hand.py` — voir `poker-rules` pour la règle d'usage obligatoire (jamais évaluer une main "à l'œil").
+**Pour qualifier la main en cours** (type de main exact, outs réels) plutôt que comparer deux ranges, utiliser `pc hand` — voir `poker-rules` pour la règle d'usage obligatoire.
 
-- `range1` / `range2` : notation `range-notation` (ex : `"QQ+,AKs,AKo"`)
-- `--board` : cartes communes déjà tombées, format concaténé sans espace (ex : `"Ah7c2d"`), vide si preflop
-- `--dead` : cartes mortes/connues à exclure (ex : la main du héros si on calcule deux ranges adverses)
-- `--iters` : nombre de simulations (20000 = bon compromis précision/vitesse, monter à 50000+ pour un board serré avec peu de combos restants)
+## Méthode (transparente, pas besoin de la choisir)
 
-Sortie : `{"range1_equity": ..., "range2_equity": ..., "iterations_used": ...}` (equity en fraction, ex 0.75 = 75%).
+Énumération exhaustive quand le volume (combos × runouts restants) reste dans un budget raisonnable — résultat exact, pas d'itérations. Sinon Monte-Carlo (graine fixe, résultat reproductible) sur le nombre d'itérations demandé. Le champ `method` de la sortie dit laquelle a été utilisée.
 
 ## Cas d'usage typiques
 
-- **Main vs range** : passer `range1` comme une notation à un seul combo (ex : `"AsKh"` n'est pas supporté tel quel par le parseur actuel — utiliser la forme abstraite la plus proche, ex `"AKs"` si suited, en notant que ça inclut les 4 combos et pas seulement celui du héros ; limitation connue, voir ci-dessous).
-- **Range vs range preflop** : `--board ""`.
-- **Range vs range postflop** : renseigner `--board`.
-- **Cotes du pot vs équité** : calculer l'équité requise pour un call = mise / (pot + 2×mise), puis comparer au résultat du script pour statuer sur la rentabilité — toujours faire ce lien explicitement avec le glossaire (`gto-glossary` → pot odds).
+- Cotes d'un call : comparer `range1_equity` au seuil `to_call / (pot + to_call)` (déjà fourni par `pc state`/`pc brief` sous `pot_odds`).
+- Main précise vs range adverse narrowée (`pc narrow`) : décision de call/fold la plus fréquente en session.
+- Range vs range : sanity check d'une range construite (`range-builder`).
 
-## Limitations connues (à corriger si besoin)
+## Sizing (%pot / montant de relance)
 
-- Pas de calcul exact pour une main précise à deux cartes fixées **dans `equity.py`** (le parseur travaille par catégories abstraites : paire/suited/offsuit) — mais `describe_hand.py`, lui, prend des cartes précises et donne un type de main/des outs exacts, pas une catégorie. Utiliser `describe_hand.py` pour qualifier une main exacte, `equity.py` pour comparer des ranges.
-- Pas de pondération `@xx%` (range partielle).
-- Simulation Monte-Carlo, pas énumération exhaustive : fiable à ±0.5-1% avec 20000 itérations, mais pas un chiffre à la décimale près comme un vrai solver.
+```bash
+pc sizing bet-pct --bet 10 --pot-before 15.5
+pc sizing raise-to --pot-before-bet 6.5 --bet-to-call 3.5 --fraction 1.0
+```
+
+Jamais de calcul de tête — voir `pc glossary` pour la convention bet vs raise.
 
 ## Ce que cette skill NE couvre PAS
 
-La stratégie de mise (fréquences GTO, mix) → `solver-reader` pour des solutions exportées, ou raisonnement qualitatif via `gto-glossary`. La construction de la range elle-même → `range-notation` / `range-builder`.
+La classification de la main en cours (type, outs, blockers) → `pc hand`. La construction/le narrowing d'une range → `range-notation`, `range-builder`, `pc narrow`.

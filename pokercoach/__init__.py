@@ -7,4 +7,4 @@ structurées depuis PokerSkill (Li, Wang, Huang — Tsinghua, arXiv:2605.30094),
 annexes D et E. Voir docs/brief/references/05-sources.md pour l'attribution complète.
 """
 
-__version__ = "2.0.0-dev"
+__version__ = "2.0.0"
