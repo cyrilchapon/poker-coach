@@ -161,6 +161,18 @@ the 124 tests passing at the time). The four ⛔ blocking findings in
   which would have also excluded a card completing hero's flush merely
   because its rank happens to coincide with an existing board rank.
   Verified identical on both the eval7 and pure-Python fallback backends.
+  **Known remaining gap** (round 2 review, not treated as blocking): the
+  neutral-hand comparison correctly filters board-pairing cards when hero
+  holds no relevant pair yet, but still over-counts them when hero is
+  *already* made — e.g. on `K♥7♣2♦` with K♦Q♠ (hero already has top pair
+  Kings), a 7 gives hero `Two Pair` (beats the neutral hand's mere `Pair`
+  from that same 7) purely because hero's pre-existing pair mechanically
+  carries through the comparison, not because the 7 is a hero-specific
+  edge — every other King also reaches `KK77`, and anyone actually
+  holding a 7 gets `Trips` and beats hero outright. Comparing against a
+  same-*class* reference hand instead of a neutral one would fix this,
+  but that's a heavier change than this fix; outs counts on already-made
+  hands should be read as an upper bound, not exact, until that's done.
 - `_classify_pair_family` indexed into `matched[0]` without sorting it
   first, so on a board already paired (both hole cards each matching a
   different board rank) the classification depended on the *input order*
