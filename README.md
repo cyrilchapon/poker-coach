@@ -93,19 +93,26 @@ for realistic opening decisions at every position, not just the SB. Both
 are covered by regression tests now (`tests/test_equity.py`,
 `tests/test_actionline.py`, `tests/test_brief.py`).
 
+**Session/multi-hand tooling** is now built, per the direction agreed with
+the user: `pokercoach`'s CLI commands stay unitary and standalone (each one
+takes a `hand.json`, does one job, and knows nothing about "a session") so
+they stay usable outside `live-session` too — e.g. for one-off hand review.
+Session bookkeeping lives instead in two scripts local to that skill
+(deliberately outside the core engine — see the docstring at the top of
+each):
+- [`skills/live-session/scripts/advance_street.py`](skills/live-session/scripts/advance_street.py) —
+  opens the next street once the current one's action is closed (rejects
+  otherwise), deals the new cards, and sets `to_act` per the postflop
+  order (`pokercoach.state.postflop_acting_order_offsets`, added for this).
+- [`skills/live-session/scripts/new_hand.py`](skills/live-session/scripts/new_hand.py) —
+  rotates the button, carries stacks/archetypes forward by physical seat,
+  posts blinds, and refuses outright (rather than silently misbehaving) if
+  the hero would bust or if a bust shrinks the table past the next hand's
+  expected blind seats (dead-button rules are out of scope).
+
 Still open:
 - 7/8-max range precision if the parameterized generalization proves too
   imprecise in practice (unchanged — no real usage to calibrate against yet).
-- **Session/multi-hand tooling** (button rotation + per-seat archetype
-  persistence across hands, automatic street transitions in `pc apply`):
-  deliberately **not** built into the core engine. Direction agreed with the
-  user: `pokercoach`'s CLI commands stay unitary and standalone (each one
-  takes a `hand.json`, does one job, and knows nothing about "a session") so
-  they stay usable outside `live-session` too — e.g. for one-off hand review.
-  Session bookkeeping belongs in a separate wrapper layer instead, with
-  `skills/live-session/SKILL.md` already acting as that wrapper at the
-  prompt level; a concrete scripted helper (e.g. under
-  `skills/live-session/scripts/`) is a candidate next step, not yet built.
 
 ## Repo layout
 
@@ -133,6 +140,8 @@ data/                   YAML tables the engine reads (ATT/DEF budgets, hand
                         ranges, multiway adjustments) — see data provenance
                         below
 skills/                 the 11 SKILL.md skills, rewritten as thin CLI wrappers
+  live-session/scripts/    session-only helpers (advance_street.py, new_hand.py) —
+                           deliberately outside pokercoach/, see above
 tests/                  pytest suite for pokercoach/, with hand fixtures
 docs/brief/             the v2 planning package this rewrite is built from:
                         brief, architecture, analysis, audit, sources

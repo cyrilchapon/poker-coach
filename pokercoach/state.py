@@ -276,6 +276,14 @@ def preflop_acting_order_offsets(n: int) -> list[int]:
     return list(range(3, n)) + [0, 1, 2]
 
 
+def postflop_acting_order_offsets(n: int) -> list[int]:
+    """Ordre de parole postflop, en écarts au bouton (0=BTN). La SB parle en
+    premier (ou la BB en heads-up, où offset 1 = BB), le bouton toujours en
+    dernier — le bouton est la seule position en position contre tout le
+    monde, quel que soit le format."""
+    return list(range(1, n)) + [0]
+
+
 def n_behind(state: HandState, seat: int) -> int:
     """Nombre de joueurs qui doivent encore parler derrière ``seat`` au
     premier tour de parole préflop (mesure STRUCTURELLE, indépendante des

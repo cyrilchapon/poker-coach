@@ -4,7 +4,10 @@ from pathlib import Path
 
 import pytest
 
-from pokercoach.state import StateError, derive, ip_postflop, n_behind, position_labels, validate_and_load
+from pokercoach.state import (
+    StateError, derive, ip_postflop, n_behind, position_labels,
+    postflop_acting_order_offsets, preflop_acting_order_offsets, validate_and_load,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -231,6 +234,16 @@ def test_n_behind_and_ip_postflop_match_reference_table(n_seats, hero_offset, ex
     state = validate_and_load(minimal_hand(n_seats, button_seat=button_seat, hero_seat=hero_seat))
     assert n_behind(state, hero_seat) == expected_n_behind
     assert ip_postflop(state, hero_seat) == expected_ip
+
+
+def test_postflop_acting_order_button_is_always_last():
+    # Heads-up: BB acts first postflop, BTN/SB last.
+    assert postflop_acting_order_offsets(2) == [1, 0]
+    # 6-max: SB first, ..., BTN last.
+    assert postflop_acting_order_offsets(6) == [1, 2, 3, 4, 5, 0]
+    # Preflop order stays UTG-first / BB-last for comparison -- the two are
+    # genuinely different orders, not the same list rotated.
+    assert preflop_acting_order_offsets(6) == [3, 4, 5, 0, 1, 2]
 
 
 def test_out_of_range_seat_count_is_rejected():
