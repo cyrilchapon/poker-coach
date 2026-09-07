@@ -74,6 +74,7 @@ def compute(raw: dict[str, Any], *, villain_archetype: str | None = None,
             key = range_table.derive_key(state, hero_seat)
             in_range: bool | None = None
             verdict_if_in_range = "raise_or_call"
+            range_confidence = "high"
             range_json = None
             hero_cards = state.seats[hero_seat].cards
             # Décision d'ouverture (RFI) : personne n'a encore volontairement
@@ -83,6 +84,7 @@ def compute(raw: dict[str, Any], *, villain_archetype: str | None = None,
             if pot_type == "srp" and actionline.is_opening_decision(state):
                 entry = range_table.rfi(key)
                 range_json = entry.to_json()
+                range_confidence = entry.confidence
                 if hero_cards:
                     if entry.strategy == "mixed_raise_limp":
                         # Deux buckets disjoints (raise / limp), pas une fréquence par
@@ -105,10 +107,12 @@ def compute(raw: dict[str, Any], *, villain_archetype: str | None = None,
                 entry = _defend_scenario_entry(state, hero_seat, pot_type, key)
                 if entry is not None:
                     range_json = entry.to_json()
+                    range_confidence = entry.confidence
                     if hero_cards and entry.range:
                         in_range = _hand_in(hero_cards, entry.range)
             out["range"] = range_json
-            decision = gates.g1_preflop_range(in_range=in_range, verdict_if_in_range=verdict_if_in_range)
+            decision = gates.g1_preflop_range(in_range=in_range, verdict_if_in_range=verdict_if_in_range,
+                                               range_confidence=range_confidence)
         if decision is None:
             # Préflop hors G0/G1 : zone grise, pas de moteur de budget préflop en v2.0.
             decision = gates.g5_grey_zone(

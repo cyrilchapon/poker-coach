@@ -26,10 +26,13 @@ from ..state import HandState, effective_stack, ip_postflop as derive_ip_postflo
 
 DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
 
-# Nombre de combos par type de main (paire / suited / offsuit) -- constant
-# quel que soit le rang, utilisé pour cumuler des COMBOS (pas des types)
-# jusqu'au pourcentage demandé dans top_pct_range().
-_COMBOS_PER_TYPE = 1326  # C(52,2)
+# Nombre total de combos de départ dans le deck -- C(52,2), PAS "les combos
+# par type de main" (régression revue #2 : le nom précédent, _COMBOS_PER_TYPE,
+# disait l'inverse de la ligne). Le nombre de combos par type est 6/4/12
+# selon paire/suited/offsuit -- c'est _combo_count() ci-dessous. TOTAL_COMBOS
+# sert de dénominateur pour convertir un pourcentage en cible de combos dans
+# top_pct_range().
+TOTAL_COMBOS = 1326  # C(52,2)
 
 
 def _combo_count(hand_type: str) -> int:
@@ -64,14 +67,27 @@ def top_pct_range(pct: float) -> str:
     scénarios restaient du code mort (aucun moyen de tester "la main du
     héros est-elle dans ce X% ?»)."""
     pct = max(0.0, min(100.0, pct))
-    target_combos = pct / 100.0 * _COMBOS_PER_TYPE
+    target_combos = pct / 100.0 * TOTAL_COMBOS
     included: list[str] = []
     cumulative = 0.0
     for hand_type in _strength_ranking():
         if cumulative >= target_combos:
             break
+        count = _combo_count(hand_type)
+        # Ce type ferait-il dépasser la cible ? L'ancien code l'incluait
+        # alors systématiquement (régression revue #2 : biais permanent vers
+        # le haut, ex. top_pct_range(1.0) -> 1,36% au lieu de 1,0% car
+        # AA,KK,QQ=18 combos est inclus alors qu'AA,KK=12 combos en est plus
+        # proche). On choisit désormais la borne la plus proche de la cible
+        # -- sauf pour le tout premier type, toujours inclus (sinon une
+        # cible trop petite renverrait une range vide).
+        if included and cumulative + count > target_combos:
+            distance_without = target_combos - cumulative
+            distance_with = cumulative + count - target_combos
+            if distance_without < distance_with:
+                break
         included.append(hand_type)
-        cumulative += _combo_count(hand_type)
+        cumulative += count
     return ",".join(included)
 
 
@@ -191,12 +207,20 @@ def vs_rfi(key: RangeKey, *, opener_n_behind: int) -> RangeEntry:
 def vs_limp(key: RangeKey) -> RangeEntry:
     """Isolation face à un limp — scénario exploitant de première classe
     (quasi absent des ressources GTO, très fréquent au niveau de l'utilisateur).
-    Élargie par rapport à la RFI standard."""
+    Élargie par rapport à la RFI standard.
+
+    ``range`` reste ``row.range`` (la range RFI curée à la main), pas
+    ``top_pct_range(pct)`` (régression revue #2) : c'est le seul des cinq
+    scénarios dérivés qui disposait déjà d'une donnée curée et déjà
+    parseable -- la remplacer par une bande synthétique par équité brute
+    l'aurait rendue strictement moins fiable sans rien gagner en
+    testabilité, contrairement à vs_rfi/squeeze/vs_3bet/vs_4bet qui n'
+    avaient qu'un pourcentage de continuation, aucune liste de mains."""
     row = rfi(key)
     if row.pct == 0:
         return row
     pct = round(min(100.0, row.pct * 1.3), 1)
-    return RangeEntry(scenario="vs_limp", range=top_pct_range(pct), pct=pct, confidence="extrapolated",
+    return RangeEntry(scenario="vs_limp", range=row.range, pct=pct, confidence="extrapolated",
                        note="isolation élargie face à un limp — traiter en scénario exploitant, pas dégénéré")
 
 

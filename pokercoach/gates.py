@@ -43,15 +43,30 @@ def g0_forced(*, hero_is_allin: bool, only_action: str | None) -> GateDecision |
     return None
 
 
-def g1_preflop_range(*, in_range: bool | None, verdict_if_in_range: str = "raise_or_call") -> GateDecision | None:
+def g1_preflop_range(*, in_range: bool | None, verdict_if_in_range: str = "raise_or_call",
+                      range_confidence: str = "high") -> GateDecision | None:
     """``verdict_if_in_range`` : "raise_or_call" pour une range simple, ou
     "raise"/"limp" pour un scénario à stratégie mixte (SB vs BB) où
-    l'appelant a déjà déterminé dans quel bucket tombe la main du héros."""
+    l'appelant a déjà déterminé dans quel bucket tombe la main du héros.
+
+    ``range_confidence`` : la confiance de la ``RangeEntry`` (ranges/table.py)
+    à l'origine de ``in_range`` -- "high" pour la RFI tabulée à la main
+    (data/preflop-rfi.yaml), "extrapolated" pour les scénarios de défense
+    dérivés (vs_rfi/vs_limp/squeeze/vs_3bet/vs_4bet, cf. ranges/table.py),
+    qui reposent sur un classement par équité brute documenté comme
+    approximatif (data/hand-strength-ranking.yaml). Régression (revue #2) :
+    ce gate rendait "forced" dans les deux cas -- un verdict RFI tabulé et
+    un verdict dérivé d'une approximation partageaient le même statut
+    épistémique dans le JSON de sortie, alors que ``range.confidence`` disait
+    déjà "extrapolated" à côté. Propager cette confiance ici (au lieu de la
+    coder en dur) retire le caractère trompeur, dans l'esprit exact du
+    correctif déjà appliqué à G2 ci-dessous."""
     if in_range is None:
         return None
+    confidence = "forced" if range_confidence == "high" else "strong"
     if in_range:
-        return GateDecision(gate="G1", verdict=verdict_if_in_range, confidence="forced")
-    return GateDecision(gate="G1", verdict="fold", confidence="forced")
+        return GateDecision(gate="G1", verdict=verdict_if_in_range, confidence=confidence)
+    return GateDecision(gate="G1", verdict="fold", confidence=confidence)
 
 
 def g2_budget_decisive(*, envisaged_action: str, viable_actions: list[str],

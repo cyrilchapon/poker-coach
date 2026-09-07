@@ -25,6 +25,17 @@ README, section calibration) — un plancher modeste et délibérément rond,
 suffisant pour que les bornes G3 restent informatives plutôt qu'un
 artefact à équité nulle, pas une fréquence de bluff précise.
 
+Plancher FIXE, pas multiplicatif (régression revue #2) : un combo reçoit le
+poids CONSTANT ``MIN_BLUFF_FLOOR_WEIGHT`` quand il est floored, jamais
+``wc.weight * MIN_BLUFF_FLOOR_WEIGHT``. Comme ``brief._narrow_through_history``
+rejoue le narrowing rue par rue en réinjectant le ``range_str`` de sortie
+dans l'entrée de la rue suivante, un poids multiplicatif se compose à
+chaque rue où le combo reste floored (0.08 -> 0.0064 -> 0.000512 mesuré sur
+trois rues) : les bornes G3 redeviennent quasi dégénérées (largeur ~0.0005
+contre un ``UNCERTAINTY_BAND`` de 0.04) — exactement l'artefact que ce
+mécanisme existe pour éviter. Un plancher, par définition, ne doit pas
+s'éroder rue après rue.
+
 Ce qui N'EST PAS corrigé ici (cause distincte, toujours ouverte, cf.
 README) : le critère de viabilité lui-même (``action in b.viable_actions``)
 reste lâche à budget FRAIS -- une main `trash` a un ATT de base non nul,
@@ -103,7 +114,18 @@ def _combo_token(wc: WeightedCombo) -> str:
     base = f"{wc.combo[0]}{wc.combo[1]}"
     if wc.weight >= 1.0 - 1e-9:
         return base
-    return f"{base}@{wc.weight * 100:.2f}%"
+    pct = wc.weight * 100
+    # Fragilité latente (revue #2) : un ``.2f`` fixe sérialise tout poids
+    # positif sous 0.00005 en "0.00%" -> reparsé comme un poids nul ->
+    # ZeroDivisionError dans equity._enumerate_equity si ça arrive à TOUS
+    # les combos gardés. Avec le plancher fixe actuel (MIN_BLUFF_FLOOR_WEIGHT
+    # = 8%) ça ne se produit pas, mais rien ne le garantit si ce plancher
+    # est recalibré plus bas -- on élargit donc la précision plutôt que de
+    # supposer que le poids sérialisé restera toujours assez grand.
+    decimals = 2
+    while round(pct, decimals) == 0 and decimals < 10:
+        decimals += 1
+    return f"{base}@{pct:.{decimals}f}%"
 
 
 def narrow(range_str: str, board: list[Card], action: str, *, pot_type: str, street: str,
@@ -137,9 +159,11 @@ def narrow(range_str: str, board: list[Card], action: str, *, pot_type: str, str
         if action in b.viable_actions:
             kept.append(wc)
         elif _pressure_exhausted(b, action):
-            floored_weight = wc.weight * MIN_BLUFF_FLOOR_WEIGHT
-            if floored_weight > 0:
-                kept.append(WeightedCombo(combo=wc.combo, weight=floored_weight))
+            # Poids plancher CONSTANT, pas `wc.weight * MIN_BLUFF_FLOOR_WEIGHT`
+            # (régression revue #2, cf. docstring du module) : sinon un combo
+            # floored sur plusieurs rues consécutives voit son poids s'éroder
+            # multiplicativement au lieu de rester à un plancher stable.
+            kept.append(WeightedCombo(combo=wc.combo, weight=MIN_BLUFF_FLOOR_WEIGHT))
         # sinon : coupé par une règle structurelle (multiway/exploit) -- rejeté entièrement
 
     original_weight = sum(c.weight for c in combos)
