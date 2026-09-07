@@ -43,15 +43,69 @@ The `data/multiway-adjustment.yaml` coefficients are explicitly marked
 `status: proposition_non_calibree` — they're isolated in YAML precisely so
 they can be tuned after real sessions without touching code.
 
-Also still open, per the brief's own §8 ("ask the user rather than decide
-alone") — none of these were decided unilaterally, they're implemented with
-a reasonable default and flagged:
-- Gate thresholds (`pokercoach/gates.py`'s `UNCERTAINTY_BAND`) and verbosity
-  per gate — a quality/cost dial that belongs to the user.
-- SB raise-or-fold vs. mixed raise/limp strategy (`data/preflop-rfi.yaml`
-  documents both options; v2.0 ships the RFI table without picking one).
+Decisions from §8 that were pending have since been made with the user and
+implemented:
+- **G3 uncertainty band**: kept at ±4 points (`gates.py`'s `UNCERTAINTY_BAND
+  = 0.04`) — the default was already right.
+- **Verbosity**: minimal everywhere except G3 (shows the deciding number)
+  and G5 (full analysis) — also already the default. On top of that,
+  `pc brief --depth full` (or `force_full=True` from Python) now escalates
+  to full detail **on demand**, on any gate, without ever changing the
+  verdict itself: same `gate`/`verdict`/`confidence`, but the equity bounds
+  and the narrowed villain ranges get computed and attached regardless, and
+  `verbosity` is forced to `"full"`. This is what a live-session coach calls
+  when the user asks "on peut voir les ranges exactes ?" after a G0–G2/G4
+  verdict.
+- **G3 bounds are real** now, not two fixed generic ranges: `pc brief`
+  identifies the most relevant villain seat (the last aggressor when the
+  hero is defending) and replays their actual in-hand actions street by
+  street through `ranges.narrow` — the same mechanism `pc narrow` exposes
+  standalone — starting from a wide and a narrow seed range. The seeds
+  themselves remain a documented approximation (not yet derived from the
+  villain's position/archetype); the narrowing through their real actions
+  is no longer approximated.
+- **MDF collective vs. individual**: `pc state`/`pc brief` now expose both
+  `mdf_collective` (the heads-up-style `pot/(pot+bet)` figure, read as the
+  *combined* obligation across every simultaneous defender) and
+  `mdf_individual` (`1 - (1 - mdf_collective) ** (1/n_defenders)` — what each
+  individual defender may fold, always ≤ what the collective figure alone
+  would suggest). `n_defenders` (also exposed) is the count of still-active
+  seats facing the current bet without having matched it yet. Applying the
+  heads-up figure uncorrected in multiway over-defends — exactly one of the
+  user's documented leaks.
+- **SB strategy: mixed raise/limp** (chosen over raise-or-fold). Implemented
+  as two disjoint buckets rather than a per-hand mixed frequency — simpler
+  to code and to teach while keeping the three-way raise/limp/fold structure
+  a pure raise-or-fold range can't express. `data/preflop-rfi.yaml`'s SB row
+  now carries `raise_range`/`limp_range`; `pc brief` returns `verdict:
+  "raise"` / `"limp"` / `"fold"` accordingly at G1.
+
+Fixed along the way (found while wiring the above, not previously caught by
+any test): `equity.parse_range`'s `XYs+`/`XYo+` handling (`_plus_connector`)
+silently returned a single combo instead of fanning the low card up to the
+high card — `"ATs+"` produced just `AT` instead of `AT,AJ,AQ,AK`. This
+affected every `+`-suffixed two-card token across `data/preflop-rfi.yaml`
+and the G3 seed ranges. Also, `actionline.role()` classified **any**
+player's first preflop decision as `"defender"` (the BB's forced post
+inflates `to_call` before anyone has voluntarily acted) instead of
+`"aggressor"/"probe"` — this silently starved `pc brief`'s G1 range lookup
+for realistic opening decisions at every position, not just the SB. Both
+are covered by regression tests now (`tests/test_equity.py`,
+`tests/test_actionline.py`, `tests/test_brief.py`).
+
+Still open:
 - 7/8-max range precision if the parameterized generalization proves too
-  imprecise in practice.
+  imprecise in practice (unchanged — no real usage to calibrate against yet).
+- **Session/multi-hand tooling** (button rotation + per-seat archetype
+  persistence across hands, automatic street transitions in `pc apply`):
+  deliberately **not** built into the core engine. Direction agreed with the
+  user: `pokercoach`'s CLI commands stay unitary and standalone (each one
+  takes a `hand.json`, does one job, and knows nothing about "a session") so
+  they stay usable outside `live-session` too — e.g. for one-off hand review.
+  Session bookkeeping belongs in a separate wrapper layer instead, with
+  `skills/live-session/SKILL.md` already acting as that wrapper at the
+  prompt level; a concrete scripted helper (e.g. under
+  `skills/live-session/scripts/`) is a candidate next step, not yet built.
 
 ## Repo layout
 

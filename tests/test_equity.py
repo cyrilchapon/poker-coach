@@ -16,6 +16,22 @@ def test_parse_range_pair_plus():
     assert ranks == {"K", "A"}
 
 
+def test_parse_range_two_card_plus_notation_fixes_high_card_and_climbs_the_low_card():
+    # Regression: _plus_connector used to keep the (r1,r2) GAP fixed and
+    # slide the whole pair up, producing a single combo (just "AT") instead
+    # of fanning out the low card under a fixed high card. ATs+ must be
+    # ATs, AJs, AQs, AKs -- 4 hands x 4 suited combos = 16.
+    combos = parse_range("ATs+")
+    assert len(combos) == 16
+    pairs = {(c.combo[0].rank, c.combo[1].rank) for c in combos}
+    assert pairs == {("A", "T"), ("A", "J"), ("A", "Q"), ("A", "K")}
+
+    # KQo+ : nothing between Q and K -> unchanged, just KQo (12 combos).
+    assert len(parse_range("KQo+")) == 12
+    # A2s+ : the widest possible fan, A2s..AKs -> 12 hands x 4 = 48 combos.
+    assert len(parse_range("A2s+")) == 48
+
+
 def test_parse_range_suited_offsuit_counts():
     suited = parse_range("AKs")
     offsuit = parse_range("AKo")

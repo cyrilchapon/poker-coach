@@ -32,14 +32,58 @@ def test_derive_hu_flop_cbet_matches_hand_computed_numbers():
     assert d.to_call == pytest.approx(4.0)
     # pot_odds = to_call / (pot + to_call) = 4 / 14
     assert d.pot_odds == pytest.approx(4 / 14)
-    # mdf = pot / (pot + to_call) = 10 / 14 = 1 - pot_odds
-    assert d.mdf == pytest.approx(10 / 14)
-    assert d.mdf == pytest.approx(1 - d.pot_odds)
+    # mdf_collective = pot / (pot + to_call) = 10 / 14 = 1 - pot_odds
+    assert d.mdf_collective == pytest.approx(10 / 14)
+    assert d.mdf_collective == pytest.approx(1 - d.pot_odds)
+    # heads-up : un seul défenseur -> individuel == collectif
+    assert d.n_defenders == 1
+    assert d.mdf_individual == pytest.approx(d.mdf_collective)
     # remaining: seat0 = 100 - 3 = 97, seat1 = 100 - 3 - 4 = 93 -> effective 93
     assert d.effective_stack == pytest.approx(93.0)
     # spr = effective_stack / pot = 93 / 10
     assert d.spr == pytest.approx(9.3)
     assert d.players_active == 2
+
+
+def test_mdf_individual_is_lower_than_collective_in_multiway():
+    # 3-handed flop: seat2 bets into seat0 (to_act) AND seat1, both facing
+    # the bet simultaneously -> n_defenders == 2. The collective obligation
+    # is shared, so each individual defender may fold MORE than the
+    # heads-up-style mdf_collective figure would suggest.
+    raw = {
+        "schema_version": "2.0",
+        "table": {"big_blind": 1.0, "ante": 0.0, "button_seat": 0},
+        "seats": [
+            {"seat": 0, "is_hero": True, "stack": 100.0, "archetype": None, "hud": None,
+             "cards": ["A♠", "K♦"], "status": "active"},
+            {"seat": 1, "is_hero": False, "stack": 100.0, "archetype": None, "hud": None,
+             "cards": None, "status": "active"},
+            {"seat": 2, "is_hero": False, "stack": 100.0, "archetype": None, "hud": None,
+             "cards": None, "status": "active"},
+        ],
+        "streets": {
+            "preflop": {"actions": [
+                {"seat": 0, "action": "call", "amount": 1.0},
+                {"seat": 1, "action": "call", "amount": 1.0},
+                {"seat": 2, "action": "call", "amount": 1.0},
+            ]},
+            "flop": {"board": ["9♦", "6♣", "2♥"], "actions": [
+                {"seat": 2, "action": "bet", "amount": 3.0},
+            ]},
+            "turn": None, "river": None,
+        },
+        "to_act": 0, "hero_seat": 0,
+    }
+    state = validate_and_load(raw)
+    d = derive(state)
+
+    assert d.pot == pytest.approx(6.0)   # 3 (preflop) + 3 (seat2's flop bet)
+    assert d.to_call == pytest.approx(3.0)
+    assert d.n_defenders == 2            # seat0 (to_act) and seat1 both face the bet
+    assert d.mdf_collective == pytest.approx(6 / 9)
+    # mdf_individual = 1 - (1 - mdf_collective) ** (1/2)
+    assert d.mdf_individual == pytest.approx(1 - (1 - 6 / 9) ** 0.5)
+    assert d.mdf_individual < d.mdf_collective
 
 
 def test_preflop_pot_and_pot_odds_before_any_flop():

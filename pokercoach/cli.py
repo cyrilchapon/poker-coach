@@ -144,7 +144,8 @@ def cmd_narrow(args: argparse.Namespace) -> dict[str, Any]:
 def cmd_brief(args: argparse.Namespace) -> dict[str, Any]:
     raw = _load_hand_json(args.hand)
     try:
-        return brief_mod.compute(raw, villain_archetype=args.villain_archetype)
+        return brief_mod.compute(raw, villain_archetype=args.villain_archetype,
+                                  force_full=(args.depth == "full"))
     except StateError:
         raise
     except ValueError as exc:
@@ -294,6 +295,11 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("brief", help="⭐ tout ce qui précède, en un appel")
     hand_arg(p)
     p.add_argument("--villain-archetype", default=None, choices=["nit", "tag", "lag", "fish", "maniac", "calling_station"])
+    p.add_argument("--depth", default="gate", choices=["gate", "full"],
+                    help="gate (défaut) : verbosité pilotée par le gate qui tranche. "
+                         "full : détail complet (ranges narrowées, bornes d'équité) même si un "
+                         "gate précoce a déjà tranché — sur demande explicite en session ('on peut "
+                         "voir les ranges exactes ?'), le verdict n'est jamais recalculé.")
     p.set_defaults(func=cmd_brief)
 
     p = sub.add_parser("render", help="dessin ASCII de la table")

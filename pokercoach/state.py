@@ -352,6 +352,22 @@ def players_active(state: HandState) -> int:
     return sum(1 for s in state.seats if s.status in ("active", "allin"))
 
 
+def n_defenders(state: HandState) -> int:
+    """Nombre de sièges encore ACTIFS (peuvent encore agir) qui font face à la
+    mise la plus haute de la rue courante sans l'avoir encore égalée —
+    ``to_act`` inclus. 1 en heads-up standard ; peut monter en multiway,
+    c'est le dénominateur du MDF individuel (voir ``derive``)."""
+    max_committed = max(
+        (street_contribution(state, state.street, s.seat) for s in state.seats
+         if s.status in ("active", "allin")),
+        default=0.0,
+    )
+    return sum(
+        1 for s in state.seats
+        if s.status == "active" and street_contribution(state, state.street, s.seat) < max_committed
+    )
+
+
 def effective_stack(state: HandState, *, seat: int | None = None) -> float:
     """Stack effectif : le plus petit stack restant parmi les sièges encore en
     lice pour le pot (celui qui plafonne ce qui peut être gagné/perdu)."""
@@ -369,10 +385,12 @@ class DerivedState:
     pot: float
     to_call: float
     pot_odds: float | None
-    mdf: float | None
+    mdf_collective: float | None
+    mdf_individual: float | None
     spr: float | None
     effective_stack: float
     players_active: int
+    n_defenders: int
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -385,10 +403,12 @@ class DerivedState:
             "pot": round(self.pot, 4),
             "to_call": round(self.to_call, 4),
             "pot_odds": None if self.pot_odds is None else round(self.pot_odds, 4),
-            "mdf": None if self.mdf is None else round(self.mdf, 4),
+            "mdf_collective": None if self.mdf_collective is None else round(self.mdf_collective, 4),
+            "mdf_individual": None if self.mdf_individual is None else round(self.mdf_individual, 4),
             "spr": None if self.spr is None else round(self.spr, 4),
             "effective_stack": round(self.effective_stack, 4),
             "players_active": self.players_active,
+            "n_defenders": self.n_defenders,
         }
 
 
@@ -396,9 +416,25 @@ def derive(state: HandState) -> DerivedState:
     """Calcule le paquet de dérivations de base : pot, cotes, MDF, SPR, qui parle.
 
     ``pot_odds`` = to_call / (pot + to_call) — équité requise pour un call rentable.
-    ``mdf`` (individuel/heads-up) = pot / (pot + to_call) = 1 - pot_odds. La
-    distinction collective/individuelle en multiway est traitée par
-    ``budget.py`` (data/multiway-adjustment.yaml), pas ici.
+
+    MDF — piège théorique documenté dans data/multiway-adjustment.yaml : en
+    heads-up un seul joueur porte l'obligation de défense, en multiway elle
+    est COLLECTIVE (c'est la fréquence de fold *combinée* qui doit rester
+    sous le seuil, donc chaque défenseur individuel peut folder davantage).
+    Appliquer le MDF heads-up tel quel en multiway conduit à SUR-défendre —
+    exactement un des modes de perte documentés de l'utilisateur.
+
+    ``mdf_collective`` = pot / (pot + to_call) — la formule heads-up
+    classique, ici interprétée comme l'obligation COMBINÉE de tous les
+    défenseurs encore à agir sur cette mise.
+    ``mdf_individual`` = 1 - (1 - mdf_collective) ** (1 / n_defenders) —
+    approximation (non un résultat exact, cf. le YAML) dérivée de :
+    la mise n'est auto-rentable pour l'agresseur QUE SI tous les défenseurs
+    foldent ; avec ``n_defenders`` défenseurs indépendants foldant chacun à
+    fréquence ``f``, cet événement a probabilité ``f ** n_defenders`` — on
+    résout pour ``f`` en l'égalant à ``1 - mdf_collective``, puis
+    ``mdf_individual = 1 - f``. En heads-up (``n_defenders == 1``), les deux
+    valeurs coïncident.
     ``spr`` = effective_stack / pot.
     """
     labels = position_labels(state)
@@ -406,7 +442,12 @@ def derive(state: HandState) -> DerivedState:
     call = to_call(state)
     denom = p + call
     pot_odds = call / denom if denom > 0 else None
-    mdf = p / denom if denom > 0 else None
+    mdf_collective = p / denom if denom > 0 else None
+    n_def = n_defenders(state)
+    mdf_individual = (
+        1 - (1 - mdf_collective) ** (1 / n_def)
+        if mdf_collective is not None and n_def > 0 else mdf_collective
+    )
     eff = effective_stack(state)
     spr = eff / p if p > 0 else None
 
@@ -420,8 +461,10 @@ def derive(state: HandState) -> DerivedState:
         pot=p,
         to_call=call,
         pot_odds=pot_odds,
-        mdf=mdf,
+        mdf_collective=mdf_collective,
+        mdf_individual=mdf_individual,
         spr=spr,
         effective_stack=eff,
         players_active=players_active(state),
+        n_defenders=n_def,
     )

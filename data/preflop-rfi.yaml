@@ -69,15 +69,28 @@ rfi:
   - n_behind: 1
     ip_postflop: false
     usual_label: "SB vs BB (6-max/8-max)"
-    pct: 40
-    range: "voir strategie_sb ci-dessous"
+    strategy: mixed_raise_limp   # arbitrage utilisateur tranché — voir strategie_sb ci-dessous
+    pct: 38.8   # combiné raise+limp — pokercoach.ranges.table synthétise `range` = raise_range,limp_range
+    raise_range: "55+,A9s+,KTs+,QTs+,JTs,ATo+,KJo+"
+    limp_range: >-
+      22-44,A2s,A3s,A4s,A5s,A6s,A7s,A8s,K2s,K3s,K4s,K5s,K6s,K7s,K8s,K9s,
+      Q2s,Q3s,Q4s,Q5s,Q6s,Q7s,Q8s,Q9s,J2s,J3s,J4s,J5s,J6s,J7s,J8s,J9s,
+      T2s,T3s,T4s,T5s,T6s,T7s,T8s,T9s-54s,A2o,A3o,A4o,A5o,K9o,KTo,Q9o,QTo,QJo,J9o,JTo,T9o
     confidence: high
 
   - n_behind: 1
     ip_postflop: true
     usual_label: "BTN/SB heads-up"
-    pct: 85
-    range: "tout sauf les pires offsuit déconnectées (72o-92o, 82o, 83o, 62o, 63o, 52o, 53o, 42o, 43o, 32o)"
+    pct: 89.1
+    # Notation réelle (corrige un bug : ce champ était de la prose non
+    # parseable, "tout sauf les pires offsuit déconnectées", jamais
+    # exercée tant que le calcul de rôle préflop confondait à tort
+    # "je fais face à la blind forcée" et "je défends face à une ouverture").
+    # Exclut précisément les combos nommés par la prose d'origine :
+    # 72o, 82o, 92o, 83o, 62o, 63o, 52o, 53o, 42o, 43o, 32o.
+    range: >-
+      22+,A2s+,K2s+,Q2s+,J2s+,T2s+,92s+,82s+,72s+,62s+,52s+,42s+,32s,
+      A2o+,K2o+,Q2o+,J2o+,T2o+,93o+,84o+,74o+,64o+,54o
     confidence: high
 
 # Preuve que l'indexation par label de position ne marche pas :
@@ -85,15 +98,18 @@ rfi:
 # Le discriminant est ip_postflop, pas le nom du siège.
 
 strategie_sb:
-  probleme: >
-    La stratégie mixte raise/limp du SB est un sujet à part entière et une source
-    classique d'erreur.
-  options:
-    - id: mix_raise_limp
-      description: "Implémenter le mix. Plus proche de l'équilibre, plus difficile à enseigner."
-    - id: raise_or_fold
-      description: "Raise-or-fold pur. Légèrement moins d'EV, beaucoup plus enseignable."
-  action_requise: "ARBITRAGE UTILISATEUR — c'est un choix pédagogique autant que technique."
+  decision: mix_raise_limp   # tranché par l'utilisateur — plus proche de l'équilibre, assumé plus difficile à enseigner
+  implementation: >
+    Deux buckets DISJOINTS (pas de fréquence par main — plus simple à coder et à
+    enseigner qu'un vrai mix probabiliste, tout en gardant la structure à trois
+    issues) : raise_range (valeur + quelques spéculatives qui jouent bien en
+    relance), limp_range (spéculatives à cotes implicites qui préfèrent limper
+    plutôt que fold ou raise-fold), le reste fold. Voir rfi[n_behind=1,
+    ip_postflop=false].{raise_range,limp_range} ci-dessus.
+  pedagogie: >
+    Le coach doit expliciter la distinction raise/limp/fold à chaque main SB,
+    pas juste dire "on joue" — c'est le point pédagogique qui justifie le choix
+    du mix plutôt que raise-or-fold.
 
 # --- Scénarios dérivés -------------------------------------------------------
 # Ne PAS créer une table par scénario. Les dériver par transformation de la RFI.

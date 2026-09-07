@@ -62,11 +62,14 @@ def role(state: HandState, *, seat: int | None = None) -> str:
     from .state import to_call
     if to_call(state, seat=seat) > 0:
         return "defender"
-    last_aggressor = _last_aggressor(state)
-    return "aggressor" if last_aggressor == seat else "probe"
+    return "aggressor" if last_aggressor(state) == seat else "probe"
 
 
-def _last_aggressor(state: HandState) -> int | None:
+def last_aggressor(state: HandState) -> int | None:
+    """Le siège du dernier joueur à avoir misé/relancé, toutes rues
+    confondues jusqu'à la rue courante incluse (``None`` si personne n'a
+    encore misé). Public : utilisé aussi par ``brief.py`` pour choisir le
+    siège adverse le plus pertinent pour les bornes d'équité G3."""
     last = None
     for street in STREETS:
         node = state.streets.get(street)

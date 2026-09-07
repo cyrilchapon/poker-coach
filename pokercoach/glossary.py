@@ -17,6 +17,8 @@ TERMS: dict[str, str] = {
     "cotes du pot": "rapport mise à payer / pot après paiement ; l'équité minimale requise pour un call rentable.",
     "spr": "Stack-to-Pot Ratio, stack effectif / taille du pot ; conditionne l'agressivité postflop.",
     "mdf": "Minimum Defense Frequency, fréquence minimale à laquelle défendre pour empêcher un bluff automatiquement rentable.",
+    "mdf collective": "en multiway, l'obligation de défense combinée de tous les défenseurs (formule heads-up pot/(pot+bet)) — pas l'obligation de chacun.",
+    "mdf individuelle": "en multiway, ce que CHAQUE défenseur peut folder individuellement tout en respectant le MDF collectif — plus permissif que le MDF heads-up, chacun peut folder davantage.",
     "blocker": "carte en main qui réduit la probabilité que l'adversaire détienne certains combos.",
     "range polarisée": "range composée de mains très fortes + bluffs, sans mains moyennes.",
     "range linéaire": "range composée des meilleures mains dans l'ordre de force, sans bluffs purs (aussi 'merged').",

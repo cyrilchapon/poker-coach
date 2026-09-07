@@ -43,11 +43,14 @@ def g0_forced(*, hero_is_allin: bool, only_action: str | None) -> GateDecision |
     return None
 
 
-def g1_preflop_range(*, in_range: bool | None) -> GateDecision | None:
+def g1_preflop_range(*, in_range: bool | None, verdict_if_in_range: str = "raise_or_call") -> GateDecision | None:
+    """``verdict_if_in_range`` : "raise_or_call" pour une range simple, ou
+    "raise"/"limp" pour un scénario à stratégie mixte (SB vs BB) où
+    l'appelant a déjà déterminé dans quel bucket tombe la main du héros."""
     if in_range is None:
         return None
     if in_range:
-        return GateDecision(gate="G1", verdict="raise_or_call", confidence="forced")
+        return GateDecision(gate="G1", verdict=verdict_if_in_range, confidence="forced")
     return GateDecision(gate="G1", verdict="fold", confidence="forced")
 
 

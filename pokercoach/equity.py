@@ -108,14 +108,12 @@ def _combos_for_ranks(r1: str, r2: str, suited: str) -> list[tuple[Card, Card]]:
 
 
 def _plus_connector(r1: str, r2: str, suited: str) -> list[tuple[Card, Card]]:
+    """``r1r2s+`` (ex ``ATs+``) : carte haute FIXÉE à ``r1``, carte basse
+    montant de ``r2`` jusqu'à juste sous ``r1`` (ATs+ = ATs,AJs,AQs,AKs)."""
     i1, i2 = RANKS.index(r1), RANKS.index(r2)
-    gap = i1 - i2
     out = []
-    for i in range(i1, len(RANKS)):
-        j = i - gap
-        if j < 0 or j >= i:
-            continue
-        out += _combos_for_ranks(RANKS[i], RANKS[j], suited)
+    for j in range(i2, i1):
+        out += _combos_for_ranks(r1, RANKS[j], suited)
     return out
 
 

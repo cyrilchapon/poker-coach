@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from pokercoach.actionline import pot_type, pressure_weight, replay_pressure, role
+from pokercoach.actionline import last_aggressor, pot_type, pressure_weight, replay_pressure, role
 from pokercoach.state import validate_and_load
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -44,6 +44,19 @@ def test_pressure_replay_hu_fixture():
     # flop bet 4.0 into a 6.0 pot = 66.7% pot
     assert replay.spent[1] == pytest.approx(pressure_weight(4.0 / 6.0 * 100))
     assert replay.faced[0] == pytest.approx(replay.spent[1])
+
+
+def test_role_aggressor_and_probe_when_not_facing_a_bet():
+    # Regression guard: role() must not shadow the last_aggressor() call
+    # with a same-named local when to_call == 0 (aggressor/probe branch).
+    raw = load_fixture("hu_flop_cbet.json")
+    raw = dict(raw)
+    raw["streets"]["flop"]["actions"] = []  # nobody has bet the flop yet
+    raw["to_act"] = 0
+    state = validate_and_load(raw)
+    assert last_aggressor(state) == 0  # seat 0 raised preflop
+    assert role(state, seat=0) == "aggressor"
+    assert role(state, seat=1) == "probe"
 
 
 def test_pot_type_limp_srp_3bet_squeeze_4bet():

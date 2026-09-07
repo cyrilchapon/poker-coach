@@ -40,12 +40,19 @@ class RangeEntry:
     pct: float
     confidence: str
     note: str | None = None
+    strategy: str = "pure"          # "pure" | "mixed_raise_limp"
+    raise_range: str | None = None  # renseigné seulement si strategy == "mixed_raise_limp"
+    limp_range: str | None = None
 
     def to_json(self) -> dict[str, Any]:
         d = {"scenario": self.scenario, "range": self.range, "pct": round(self.pct, 1),
              "confidence": self.confidence}
         if self.note:
             d["note"] = self.note
+        if self.strategy == "mixed_raise_limp":
+            d["strategy"] = self.strategy
+            d["raise_range"] = self.raise_range
+            d["limp_range"] = self.limp_range
         return d
 
 
@@ -89,6 +96,16 @@ def rfi(key: RangeKey) -> RangeEntry:
         # BB (n_behind=0) n'ouvre pas ; au-delà de 7 n'existe pas en 8-max.
         return RangeEntry(scenario="rfi", range="", pct=0.0, confidence="n/a",
                            note="pas de scénario RFI pour cette position (ex. BB)")
+    if row.get("strategy") == "mixed_raise_limp":
+        # SB vs BB : deux buckets disjoints (raise / limp), pas une fréquence
+        # par main — arbitrage utilisateur, voir data/preflop-rfi.yaml
+        # (strategie_sb) et skills/live-session pour la doctrine pédagogique.
+        raise_range, limp_range = row["raise_range"], row["limp_range"]
+        return RangeEntry(
+            scenario="rfi", range=f"{raise_range},{limp_range}", pct=row["pct"],
+            confidence=row["confidence"], note=row.get("usual_label"),
+            strategy="mixed_raise_limp", raise_range=raise_range, limp_range=limp_range,
+        )
     return RangeEntry(scenario="rfi", range=row["range"], pct=row["pct"],
                        confidence=row["confidence"], note=row.get("usual_label"))
 

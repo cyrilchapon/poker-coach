@@ -56,6 +56,22 @@ def test_vs_limp_widens_over_rfi():
     assert limp_entry.pct > rfi_entry.pct
 
 
+def test_sb_rfi_is_a_disjoint_mixed_raise_limp_strategy():
+    from pokercoach.equity import parse_range
+
+    state = validate_and_load(minimal_hand(6, button_seat=0, hero_seat=1))  # seat1 = SB
+    key = table.derive_key(state, 1)
+    entry = table.rfi(key)
+
+    assert entry.strategy == "mixed_raise_limp"
+    assert entry.raise_range and entry.limp_range
+    assert entry.range == f"{entry.raise_range},{entry.limp_range}"
+
+    raise_combos = {frozenset((c.rank, c.suit) for c in wc.combo) for wc in parse_range(entry.raise_range)}
+    limp_combos = {frozenset((c.rank, c.suit) for c in wc.combo) for wc in parse_range(entry.limp_range)}
+    assert raise_combos.isdisjoint(limp_combos)  # jamais les deux à la fois pour une même main
+
+
 def test_narrow_removes_combos_that_cannot_support_a_raise():
     board = parse_cards(["9♦", "6♣", "2♥"])
     # Some pressure already spent this street: trash (ATT baseline ~0.5) can
