@@ -5,8 +5,9 @@ from pathlib import Path
 import pytest
 
 from pokercoach.state import (
-    StateError, derive, ip_postflop, n_behind, position_labels,
-    postflop_acting_order_offsets, preflop_acting_order_offsets, validate_and_load,
+    StateError, derive, hero_closes_action, ip_postflop, n_behind, players_to_act_behind,
+    position_labels, postflop_acting_order_offsets, preflop_acting_order_offsets,
+    seats_still_to_act, validate_and_load,
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -320,3 +321,146 @@ def test_street_gap_is_rejected():
     raw["streets"]["turn"] = {"board": ["9♦", "6♣", "2♥", "3♦"], "actions": []}
     with pytest.raises(StateError, match="trou"):
         validate_and_load(raw)
+
+
+# --- who still has to act (live-session #1, corrected in PR #9 review) ------
+#
+# These cover the function directly: the only assertion that existed before
+# (test_brief.py, on the squeeze fixture) happened to hit the one shape that
+# was already right -- a fresh preflop round -- which is exactly how the
+# reopened-action bug below survived.
+
+def _hand(n_seats: int, button_seat: int, hero_seat: int, statuses: list[str],
+           streets: dict, to_act: int) -> dict:
+    seats = make_seats(n_seats, hero_seat=hero_seat)
+    for seat, status in zip(seats, statuses):
+        seat["status"] = status
+    return {
+        "schema_version": "2.0",
+        "table": {"big_blind": 1.0, "ante": 0.0, "button_seat": button_seat},
+        "seats": seats, "streets": streets, "to_act": to_act, "hero_seat": hero_seat,
+    }
+
+
+# 3-max, button seat 0 -> postflop order is seat1 (SB), seat2 (BB), seat0 (BTN).
+_LIMPED_PREFLOP = {"actions": [
+    {"seat": 1, "action": "post", "amount": 0.5},
+    {"seat": 2, "action": "post", "amount": 1.0},
+    {"seat": 0, "action": "call", "amount": 1.0},
+    {"seat": 1, "action": "call", "amount": 1.0},
+    {"seat": 2, "action": "check", "amount": 1.0},
+]}
+
+
+def _three_max_flop(flop_actions: list[dict], to_act: int) -> dict:
+    return _hand(
+        3, button_seat=0, hero_seat=1, statuses=["active"] * 3,
+        streets={"preflop": _LIMPED_PREFLOP,
+                 "flop": {"board": ["T♠", "9♥", "2♣"], "actions": flop_actions},
+                 "turn": None, "river": None},
+        to_act=to_act,
+    )
+
+
+def test_players_to_act_behind_counts_everyone_on_a_fresh_street():
+    state = validate_and_load(_three_max_flop([], to_act=1))
+    assert players_to_act_behind(state) == 2
+    assert seats_still_to_act(state) == [0, 2]
+    assert hero_closes_action(state) is False
+
+
+def test_players_to_act_behind_is_zero_once_the_action_comes_back_around():
+    # Regression (PR #9 review, blocking): the first implementation took a
+    # slice of the STRUCTURAL acting order (SB->BB->BTN) filtered to active
+    # seats, so it still counted seat2 and seat0 as "yet to speak" -- when
+    # they had both already acted this round, which is precisely why the
+    # action came back to hero. Calling here closes the street: the honest
+    # answer is 0 / True, and `pc state`/`pc brief` publish these fields as
+    # THE mechanical answer to "is anyone left behind me?".
+    state = validate_and_load(_three_max_flop([
+        {"seat": 1, "action": "check", "amount": 0},
+        {"seat": 2, "action": "bet", "amount": 3.0},
+        {"seat": 0, "action": "call", "amount": 3.0},
+    ], to_act=1))
+    assert players_to_act_behind(state) == 0
+    assert seats_still_to_act(state) == []
+    assert hero_closes_action(state) is True
+
+
+def test_a_raise_reopens_the_action_for_a_seat_that_already_bet():
+    # seat2 bet, seat0 raised over it: seat2 owes an answer again, seat0 (the
+    # raiser) does not. Position in the order says nothing here -- only the
+    # history does.
+    state = validate_and_load(_three_max_flop([
+        {"seat": 1, "action": "check", "amount": 0},
+        {"seat": 2, "action": "bet", "amount": 3.0},
+        {"seat": 0, "action": "raise", "amount": 9.0},
+    ], to_act=1))
+    assert seats_still_to_act(state) == [2]
+    assert hero_closes_action(state) is False
+
+
+def test_an_all_in_short_of_the_current_bet_does_not_reopen_the_action():
+    # seat2 shoves 3.0 into a 4.0 bet: a partial call, not a raise. Treating
+    # any all-in as aggression put seat0 -- already square at 4.0 -- back
+    # among the players still to act.
+    state = validate_and_load(_hand(
+        4, button_seat=0, hero_seat=3, statuses=["active", "folded", "allin", "active"],
+        streets={"preflop": {"actions": [
+            {"seat": 1, "action": "post", "amount": 0.5},
+            {"seat": 2, "action": "post", "amount": 1.0},
+            {"seat": 3, "action": "raise", "amount": 4.0},
+            {"seat": 0, "action": "call", "amount": 4.0},
+            {"seat": 1, "action": "fold", "amount": 0.5},
+            {"seat": 2, "action": "allin", "amount": 3.0},
+        ]}, "flop": None, "turn": None, "river": None},
+        to_act=3,
+    ))
+    # folded and all-in seats can no longer act, whatever the order says
+    assert seats_still_to_act(state) == []
+    assert hero_closes_action(state) is True
+
+
+def test_preflop_rfi_still_counts_the_whole_table_behind_the_first_actor():
+    # The shape the original implementation got right -- kept so the fix for
+    # the reopened case can't silently break the fresh-round one.
+    state = validate_and_load(_hand(
+        6, button_seat=0, hero_seat=3, statuses=["active"] * 6,
+        streets={"preflop": {"actions": [
+            {"seat": 1, "action": "post", "amount": 0.5},
+            {"seat": 2, "action": "post", "amount": 1.0},
+        ]}, "flop": None, "turn": None, "river": None},
+        to_act=3,
+    ))
+    assert players_to_act_behind(state) == 5
+
+
+def test_the_big_blind_option_closes_the_preflop_round():
+    # Everyone limps to the BB: a `post` is forced, not a voluntary action,
+    # so the BB still owes one -- but nobody owes one behind it.
+    state = validate_and_load(_hand(
+        6, button_seat=0, hero_seat=2, statuses=["active"] * 6,
+        streets={"preflop": {"actions": [
+            {"seat": 1, "action": "post", "amount": 0.5},
+            {"seat": 2, "action": "post", "amount": 1.0},
+            {"seat": 3, "action": "call", "amount": 1.0},
+            {"seat": 4, "action": "call", "amount": 1.0},
+            {"seat": 5, "action": "call", "amount": 1.0},
+            {"seat": 0, "action": "call", "amount": 1.0},
+            {"seat": 1, "action": "call", "amount": 1.0},
+        ]}, "flop": None, "turn": None, "river": None},
+        to_act=2,
+    ))
+    assert players_to_act_behind(state) == 0
+    assert hero_closes_action(state) is True
+
+
+def test_players_to_act_behind_is_published_by_derive():
+    state = validate_and_load(_three_max_flop([
+        {"seat": 1, "action": "check", "amount": 0},
+        {"seat": 2, "action": "bet", "amount": 3.0},
+        {"seat": 0, "action": "call", "amount": 3.0},
+    ], to_act=1))
+    d = derive(state).to_json()
+    assert d["players_to_act_behind"] == 0
+    assert d["hero_closes_action"] is True

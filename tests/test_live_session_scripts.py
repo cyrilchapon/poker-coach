@@ -97,6 +97,43 @@ def test_advance_street_works_without_pokercoach_pip_installed(tmp_path):
     assert derived["street"] == "turn"
 
 
+def test_failed_advance_street_cannot_be_silently_ignored_by_a_later_showdown(tmp_path):
+    # THE end-to-end regression (live-session review #6). advance_street.py
+    # already exited non-zero on an unclosed action -- correct -- but nothing
+    # *technically* stopped the caller from ignoring that code and carrying
+    # on: `pc showdown` never read hand.json at all, so it produced a
+    # complete, plausible river showdown on a board that existed nowhere in
+    # the state (still preflop). Both halves of the guard are asserted here:
+    # the failure now names its consequence, and the follow-up showdown
+    # refuses instead of fabricating a result.
+    raw = copy.deepcopy(load_fixture("hu_flop_cbet.json"))  # seat0 has yet to answer the bet
+    hand_path = tmp_path / "hand.json"
+    hand_path.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
+
+    failed = subprocess.run(
+        [sys.executable, str(SCRIPTS_DIR / "advance_street.py"),
+         "--hand", str(hand_path), "--deal", "5♦"],
+        cwd=REPO_ROOT, capture_output=True, text=True, timeout=30,
+    )
+    assert failed.returncode == 1
+    # The failure states what remains true, not just what went wrong.
+    assert "INCHANGÉ" in failed.stderr and "'flop'" in failed.stderr
+    assert json.loads(hand_path.read_text(encoding="utf-8"))["streets"]["turn"] is None
+
+    # A caller that ignored that exit code and pressed on to a showdown,
+    # through the invocation SKILL.md documents (`scripts/pc ...`, which
+    # self-bootstraps -- no pip install assumed):
+    showdown = subprocess.run(
+        [sys.executable, str(SCRIPTS_DIR / "pc"), "showdown",
+         "--from-hand", str(hand_path), "--board", "T♠,9♥,2♣,5♦,8♥",
+         "--hand", "Hero:A♠,K♦", "--hand", "BB:Q♣,Q♥"],
+        cwd=REPO_ROOT, capture_output=True, text=True, timeout=30,
+    )
+    assert showdown.returncode == 1, showdown.stdout
+    assert "pas à la river" in showdown.stderr
+    assert showdown.stdout == ""  # no fabricated result to mistake for a real one
+
+
 # --- advance_street.py ------------------------------------------------------
 
 def test_advance_rejects_unclosed_action():

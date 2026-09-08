@@ -534,18 +534,26 @@ def test_brief_g3_bounds_are_not_degenerate_after_heavy_multi_street_pressure():
     assert eq["upper_bound"] > eq["lower_bound"] >= 0.0
 
 
-def test_brief_squeeze_declined_never_folds_strong_without_computing_equity():
+def test_brief_bb_defense_multiway_declined_never_folds_strong_without_computing_equity():
     # Regression (bug report): BB with J8o closing the action at 7.7:1 in a
-    # 5-way squeeze pot (UTG LAG opens, three Fish call). The squeeze()
-    # range (top 4.1%) never contains J8o, but that only says "don't
-    # squeeze" -- it says nothing about the call, which used to fall
-    # straight through G1 as "fold"/"strong" without ever comparing equity
-    # to pot odds. Exact repro fixture attached to the bug report -- the
-    # expected result is not necessarily "call", but it must never be
-    # "fold" with confidence "strong" on an unevaluated decision.
+    # 5-way pot (UTG LAG opens, three Fish call, hero BB last to speak).
+    # bb_defense_multiway()'s range (top 10%) never contains J8o, but that's
+    # a formula's cutoff, not a fold verdict -- it used to fall straight
+    # through G1 as "fold"/"strong" without ever comparing equity to pot
+    # odds. Exact repro fixture attached to the bug report -- the expected
+    # result is not necessarily "call", but it must never be "fold" with
+    # confidence "strong" on an unevaluated decision.
+    #
+    # Also the repro fixture for a SEPARATE bug (live-session report #2):
+    # hero here CLOSES the action (players_to_act_behind == 0, cf.
+    # state.py) -- she isn't squeezing, she's defending. The scenario used
+    # to be mislabeled "squeeze" (a genuinely different, more polarized
+    # range) purely because a call followed the last raise, regardless of
+    # whether hero had anyone left to act behind her.
     raw = load_fixture("squeeze_bb_j8o_repro.json")
     out = brief.compute(raw, villain_archetype="fish")
-    assert out["range"]["scenario"] == "squeeze"
+    assert out["state"]["hero_closes_action"] is True
+    assert out["range"]["scenario"] == "bb_defense_multiway"
     assert not (out["verdict"] == "fold" and out["confidence"] == "strong")
     # The call was never even considered before this fix -- now it must be,
     # whichever gate ends up deciding (G1B outright, or G5 if the computed
@@ -555,17 +563,17 @@ def test_brief_squeeze_declined_never_folds_strong_without_computing_equity():
     assert out["equity"]["threshold"] == pytest.approx(out["state"]["pot_odds"])
 
 
-def test_brief_squeeze_in_range_still_raises():
-    # The in-range side of squeeze must keep deciding "raise" directly (G1,
-    # not deferred) -- only the out-of-range side changed.
+def test_brief_bb_defense_multiway_in_range_still_decides_directly():
+    # The in-range side must keep deciding directly at G1 (not deferred) --
+    # only the out-of-range side needs the equity carve-out above.
     raw = load_fixture("squeeze_bb_j8o_repro.json")
     raw = dict(raw)
     raw["seats"] = [dict(s) for s in raw["seats"]]
-    raw["seats"][0]["cards"] = ["A♠", "A♥"]  # comfortably inside the squeeze range
+    raw["seats"][0]["cards"] = ["A♠", "A♥"]  # comfortably inside the defense range
     out = brief.compute(raw)
     assert out["gate"] == "G1"
-    assert out["range"]["scenario"] == "squeeze"
-    assert out["verdict"] == "raise"
+    assert out["range"]["scenario"] == "bb_defense_multiway"
+    assert out["verdict"] == "raise_or_call"
 
 
 def test_brief_never_crashes_on_river():

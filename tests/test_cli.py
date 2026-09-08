@@ -386,3 +386,143 @@ def test_cli_showdown(capsys):
     assert code == 0
     results = json.loads(out)["results"]
     assert results[0]["result"] == "win"
+
+
+# --- showdown tied to the canonical state (live-session review #6) ----------
+
+RIVER_HAND = str(FIXTURES / "river_showdown_3way.json")
+
+
+def _preflop_unclosed(tmp_path) -> str:
+    """The exact repro state: preflop, action NOT closed (so advance_street.py
+    refuses), hand.json therefore still on preflop with an empty board."""
+    raw = json.loads(Path(RIVER_HAND).read_text(encoding="utf-8"))
+    raw["streets"]["preflop"]["actions"] = raw["streets"]["preflop"]["actions"][:3]
+    raw["streets"]["flop"] = raw["streets"]["turn"] = raw["streets"]["river"] = None
+    raw["seats"][2]["status"] = "active"
+    raw["to_act"] = 1
+    path = tmp_path / "repro.json"
+    path.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
+    return str(path)
+
+
+def test_showdown_from_hand_refuses_a_board_the_state_never_had(tmp_path, capsys):
+    # THE regression (live-session review #6): `pc showdown` never read
+    # hand.json at all, so after an advance_street.py that FAILED (non-zero
+    # exit, ignored by the caller) it happily resolved a complete, plausible
+    # river showdown on a board that existed nowhere in the state -- hand.json
+    # was still preflop. --from-hand makes that impossible: a showdown needs a
+    # real river.
+    hand = _preflop_unclosed(tmp_path)
+    code, _, err = run(["showdown", "--from-hand", hand,
+                         "--board", "T♠,9♥,2♣,5♦,8♥",
+                         "--hand", "Hero:A♠,K♦", "--hand", "SB:Q♣,Q♥"], capsys)
+    assert code == 1
+    assert "pas à la river" in err and "preflop" in err
+
+
+def test_showdown_from_hand_resolves_from_the_state(capsys):
+    # Happy path: board and hero's cards come from hand.json, only the
+    # villain's revealed cards are passed in.
+    code, out, err = run(["showdown", "--from-hand", RIVER_HAND, "--hand", "SB:Q♣,Q♥"], capsys)
+    assert code == 0, err
+    payload = json.loads(out)
+    assert payload["source"] == "hand.json"
+    assert payload["board"] == ["T♠", "9♥", "2♣", "5♦", "8♥"]
+    assert payload["street"] == "river"
+    winner = payload["results"][0]
+    assert winner["name"] == "SB" and winner["result"] == "win"
+    hero = [r for r in payload["results"] if r["is_hero"]]
+    assert len(hero) == 1 and hero[0]["seat"] == 0  # hero identified, not just named
+
+
+def test_showdown_from_hand_rejects_a_board_that_contradicts_the_state(capsys):
+    code, _, err = run(["showdown", "--from-hand", RIVER_HAND,
+                         "--board", "T♠,9♥,2♣,5♦,7♥", "--hand", "SB:Q♣,Q♥"], capsys)
+    assert code == 1
+    assert "contredit le board de l'état" in err
+
+
+def test_showdown_from_hand_rejects_cards_contradicting_hand_json(capsys):
+    code, _, err = run(["showdown", "--from-hand", RIVER_HAND,
+                         "--hand", "SB:Q♣,Q♥", "--hand", "Hero:2♦,3♦"], capsys)
+    assert code == 1
+    assert "contredisent celles déjà connues" in err
+
+
+def test_showdown_from_hand_rejects_a_folded_seat(capsys):
+    code, _, err = run(["showdown", "--from-hand", RIVER_HAND,
+                         "--hand", "SB:Q♣,Q♥", "--hand", "BB:7♣,7♦"], capsys)
+    assert code == 1
+    assert "n'est plus en lice" in err
+
+
+def test_showdown_from_hand_rejects_a_missing_contestant(capsys):
+    # Resolving a 2-way showdown with only hero's cards known would silently
+    # declare hero the winner -- coherent-looking, and wrong.
+    code, _, err = run(["showdown", "--from-hand", RIVER_HAND], capsys)
+    assert code == 1
+    assert "cartes inconnues pour ['SB']" in err
+
+
+def test_showdown_from_hand_rejects_a_card_dealt_twice(capsys):
+    # validate_and_load already forbids duplicate cards STORED in hand.json,
+    # but CLI-supplied cards bypass that -- two players holding the same ace
+    # would resolve into an impeccably-computed, materially impossible result.
+    code, _, err = run(["showdown", "--from-hand", RIVER_HAND, "--hand", "SB:A♠,Q♥"], capsys)
+    assert code == 1
+    assert "en double" in err and "siège BTN" in err  # hero already holds A♠
+
+    code, _, err = run(["showdown", "--from-hand", RIVER_HAND, "--hand", "SB:T♠,Q♥"], capsys)
+    assert code == 1
+    assert "en double" in err and "board" in err
+
+
+def test_showdown_from_hand_rejects_the_same_seat_twice(capsys):
+    # Last-one-wins would silently resolve one of two contradictory hands.
+    code, _, err = run(["showdown", "--from-hand", RIVER_HAND,
+                         "--hand", "SB:Q♣,Q♥", "--hand", "SB:7♣,7♦"], capsys)
+    assert code == 1
+    assert "renseigné deux fois" in err
+
+
+def test_showdown_from_hand_rejects_an_unknown_name(capsys):
+    code, _, err = run(["showdown", "--from-hand", RIVER_HAND, "--hand", "Villain:Q♣,Q♥"], capsys)
+    assert code == 1
+    assert "ne désigne aucun siège" in err
+
+
+def test_showdown_without_from_hand_still_works_as_a_free_calculator(capsys):
+    # The free-floating form stays available for "what beats what" questions
+    # outside a hand -- it just no longer masquerades as session tooling.
+    code, out, err = run(["showdown", "--board", "Qc,9s,6d,Qd,Ks",
+                          "--hand", "Hero:Ac,6h", "--hand", "HJ:Kd,Td"], capsys)
+    assert code == 0, err
+    assert json.loads(out)["source"] == "arguments"
+
+
+def test_showdown_requires_a_board_without_from_hand(capsys):
+    code, _, err = run(["showdown", "--hand", "Hero:Ac,6h"], capsys)
+    assert code == 1
+    assert "--board est requis" in err
+
+
+# --- render tripwire (live-session review #6) -------------------------------
+
+def test_render_expect_street_fails_loudly_on_drift(capsys):
+    code, out, err = run(["render", "--hand", HAND, "--expect-street", "river"], capsys)
+    assert code == 1
+    assert "diverge" in err and "rien n'a été dessiné" in err
+    assert out == ""  # no stale table drawn alongside the error
+
+
+def test_render_expect_street_passes_when_the_state_agrees(capsys):
+    code, out, err = run(["render", "--hand", HAND, "--expect-street", "flop"], capsys)
+    assert code == 0, err
+    assert json.loads(out)["state"]["street"] == "flop"
+
+
+def test_render_expect_board_fails_loudly_on_drift(capsys):
+    code, _, err = run(["render", "--hand", HAND, "--expect-board", "A♠,A♥,A♦"], capsys)
+    assert code == 1
+    assert "board attendu" in err

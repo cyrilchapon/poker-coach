@@ -221,7 +221,11 @@ def render(*, seats: dict[str, dict], hero_position: str, hero: dict, board: lis
 
     def action_content(pos: str | None) -> str:
         action, amount = s(pos, "action", ""), s(pos, "amount")
-        return f"{action} · {bb(amount)}" if action and amount else (action or "")
+        # `amount and` (plutôt que `amount is not None and amount != ""`)
+        # faisait disparaître le "· 0𝄫" d'un montant nul (ex. fold à 0, ou un
+        # check explicitement à 0) -- 0 est un montant réel, pas une absence
+        # de montant (cf. `bb()`, qui SAIT afficher "0𝄫").
+        return f"{action} · {bb(amount)}" if action and amount not in (None, "") else (action or "")
 
     left_labels, top_label, right_labels = _split_layout(order)
     left_col = list(reversed(left_labels))  # rendu haut -> bas
@@ -304,7 +308,10 @@ def render(*, seats: dict[str, dict], hero_position: str, hero: dict, board: lis
     if hero_action == "post":
         hero_action = "sb" if hero_position == "SB" else "bb" if hero_position == "BB" else "post"
     hero_amount = hero.get("amount")
-    hero_content = f"{hero_action} · {bb(hero_amount)}" if hero_action and hero_amount else hero_action
+    # Même correctif que `action_content` ci-dessus : un montant à 0 ne doit
+    # pas faire disparaître le "· 0𝄫".
+    hero_content = (f"{hero_action} · {bb(hero_amount)}"
+                    if hero_action and hero_amount not in (None, "") else hero_action)
     lines.append(" " * SIDE_W + "│" + _c(hero_content, INNER) + "│")
     lines.append(" " * SIDE_W + "╰" + "─" * INNER + "╯")
 

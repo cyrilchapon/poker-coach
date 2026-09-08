@@ -17,8 +17,16 @@ Sous-commandes :
     pc ranges   --hand hand.json --scenario {rfi,vs_rfi,vs_limp,squeeze,vs_3bet,vs_4bet}
                 [--seat N] [--opener-seat N]    lookup direct d'un scénario dérivé
     pc brief    --hand hand.json [--villain-archetype X]    ⭐ tout en un appel
-    pc render   --hand hand.json
-    pc showdown --board B --hand NAME:C1C2 [--hand NAME:C1C2 ...]
+    pc render   --hand hand.json [--expect-street S] [--expect-board ...]
+                --expect-* : tripwire d'état inline (même vérification que `pc assert-state`,
+                mais dans l'appel déjà fait avant chaque décision) — échoue sans rien dessiner
+                si la rue/le board réels divergent de ce que le coach croit être vrai
+    pc showdown --from-hand hand.json [--hand POSITION:C1,C2 ...]     ⭐ en session
+                board et cartes connues repris de l'état canonique ; échoue si l'état n'est
+                pas à la river, si un argument le contredit, ou s'il manque un joueur encore
+                en lice — sans --from-hand, pc showdown ne lit PAS hand.json et résoudra
+                volontiers un board qui n'a jamais existé
+    pc showdown --board B --hand NAME:C1,C2 [--hand NAME:C1,C2 ...]   (calculatrice libre)
     pc glossary <terme>
     pc apply    --hand hand.json --action "b 5.5"  applique une action, réécrit l'état
     pc assert-state --hand hand.json [--street S] [--board ...] [--to-act N]
@@ -32,6 +40,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -116,10 +125,21 @@ def cmd_budget(args: argparse.Namespace) -> dict[str, Any]:
 
 # --- equity / narrow ---------------------------------------------------------
 
+def _split_card_tokens(s: str) -> list[str]:
+    """Découpe une liste de cartes séparées par des virgules -- et tolère
+    aussi l'espace comme séparateur (rapport de bug live-session #5b :
+    ``--hand "SB:7♣ 5♠"`` échouait avec un message trompeur, "carte invalide
+    (2 caractères attendus) : '7♣ 5♠'", qui parle d'UNE carte alors que le
+    vrai problème est le séparateur d'une LISTE de cartes -- accepter
+    l'espace en plus de la virgule règle le cas d'usage sans avoir à
+    apprendre une convention de saisie supplémentaire)."""
+    return [t for t in re.split(r"[,\s]+", s.strip()) if t]
+
+
 def _parse_card_list(s: str | None) -> list[Card]:
     if not s:
         return []
-    return parse_cards([t for t in s.split(",") if t])
+    return parse_cards(_split_card_tokens(s))
 
 
 def cmd_equity(args: argparse.Namespace) -> dict[str, Any]:
@@ -234,6 +254,24 @@ def cmd_brief(args: argparse.Namespace) -> dict[str, Any]:
 
 def cmd_render(args: argparse.Namespace) -> dict[str, Any]:
     state = _load_state(args.hand)
+
+    # Tripwire optionnel, dans l'appel que le coach fait DÉJÀ avant chaque
+    # décision (revue live-session #6) : `pc assert-state` offre la même
+    # vérification, mais en tant qu'étape séparée -- donc à ne pas oublier,
+    # c-à-d exactement le genre de discipline d'appelant qui a déjà lâché
+    # (une rue narrée sans advance_street.py, un advance_street.py en échec
+    # dont le code retour n'a pas été lu). Ici, annoncer la rue attendue
+    # fait échouer le rendu lui-même plutôt que dessiner une table périmée
+    # que le récit contredit.
+    errors = _state_divergences(state, street=args.expect_street, board=args.expect_board)
+    if errors:
+        raise StateError(
+            "pc render : l'état réel diverge de ce qui était attendu (" + " ; ".join(errors)
+            + ") — rien n'a été dessiné. Cause typique : une transition de rue narrée sans "
+              "advance_street.py, ou un advance_street.py resté en échec dont le code retour "
+              "n'a pas été vérifié."
+        )
+
     labels = position_labels(state)
     node = state.streets[state.street]
 
@@ -242,6 +280,26 @@ def cmd_render(args: argparse.Namespace) -> dict[str, Any]:
         for act in node["actions"]:
             if act["seat"] == seat.seat:
                 action, amount = act["action"], act.get("amount")
+        # Régression (revue live-session #5a) : un siège couché/tapis sur une
+        # rue PRÉCÉDENTE n'a par définition aucune entrée dans les actions de
+        # la rue COURANTE -- `amount` restait à `None` (rendu vide par
+        # render.py) alors que le docstring de render.py promet que "fold
+        # affiche quand même le montant engagé" ; ``action`` bénéficiait déjà
+        # d'un repli sur ``status`` (cf. ``render.s()``), mais rien
+        # n'existait côté ``amount``. On relit ici le montant de sa toute
+        # DERNIÈRE action connue (n'importe quelle rue, jusqu'à la rue
+        # courante incluse) -- c'est nécessairement son montant final, un
+        # siège couché/tapis ne pouvant plus agir ensuite.
+        if not action and seat.status in ("folded", "allin"):
+            for street in STREETS:
+                street_node = state.streets.get(street)
+                if street_node is None:
+                    break
+                for act in street_node["actions"]:
+                    if act["seat"] == seat.seat:
+                        amount = act.get("amount")
+                if street == state.street:
+                    break
         # Régression : ``seat.stack`` est le stack de DÉBUT DE MAIN, jamais
         # débité par `pc apply`/`advance_street.py` en cours de main (seul
         # `new_hand.py` réconcilie, en fin de main) -- l'afficher tel quel
@@ -293,13 +351,179 @@ def cmd_render(args: argparse.Namespace) -> dict[str, Any]:
     return {"ascii": ascii_art, "state": d.to_json()}
 
 
+def _parse_showdown_entry(entry: str) -> tuple[str, list[Card]]:
+    if ":" not in entry:
+        raise StateError(
+            f"entrée de showdown invalide : {entry!r} — format attendu NOM:CARTES "
+            "(ex. \"CO:K♦,T♦\")"
+        )
+    name, cards_str = entry.split(":", 1)
+    cards = parse_cards(_split_card_tokens(cards_str))
+    if len(cards) != 2:
+        raise StateError(f"{name} : 2 cartes attendues, reçu {len(cards)}")
+    return name.strip(), cards
+
+
+def _seat_by_showdown_name(state, name: str) -> int | None:
+    """Résout un nom d'entrée de showdown en siège physique : label de
+    position (BTN/SB/BB/UTG/…, insensible à la casse), ``hero``, ou l'index
+    de siège brut. ``None`` si le nom ne désigne aucun siège."""
+    labels = position_labels(state)
+    wanted = name.strip().lower()
+    if wanted == "hero":
+        return state.hero_seat
+    for seat, label in labels.items():
+        if label.lower() == wanted:
+            return seat
+    if wanted.isdigit() and int(wanted) < state.n_seats:
+        return int(wanted)
+    return None
+
+
+def _showdown_from_state(args: argparse.Namespace) -> dict[str, Any]:
+    """``pc showdown --from-hand hand.json`` : le board et les cartes connues
+    viennent de l'ÉTAT CANONIQUE, pas d'arguments libres.
+
+    Garde-fou mécanique (revue live-session #6). Sans ``--from-hand``,
+    ``pc showdown`` ne lit pas ``hand.json`` du tout : c'est une calculatrice
+    à arguments libres, qui résout aussi volontiers un board qui n'a jamais
+    existé dans l'état. Constat de session : après un ``advance_street.py``
+    resté EN ÉCHEC (code retour non nul, ignoré), un showdown de river
+    complet et cohérent en apparence a été produit alors que ``hand.json``
+    était toujours au préflop — la classe de bug « ne jamais halluciner la
+    table » (cf. skills/live-session/SKILL.md), mais côté outillage : rien
+    ne pouvait la détecter, puisque rien ne comparait quoi que ce soit.
+
+    Avec ``--from-hand``, ce chemin devient impossible :
+    - l'état doit RÉELLEMENT être à la river (board complet) — un showdown
+      sur un état préflop/flop/turn échoue bruyamment, ce qui est exactement
+      le repro ci-dessus ;
+    - un ``--board`` explicite doit correspondre au board de l'état ;
+    - les cartes déjà connues dans ``hand.json`` priment, et toute entrée
+      ``--hand`` qui les contredit échoue ;
+    - tous les sièges encore en lice doivent être renseignés — sinon un
+      showdown à 3 serait résolu comme un heads-up sans que rien ne le dise.
+    """
+    state = _load_state(args.from_hand)
+    labels = position_labels(state)
+
+    if state.street != "river":
+        raise StateError(
+            f"pas de showdown possible : l'état réel est à {state.street!r}, pas à la river "
+            f"(board {[str(c) for c in state.board]}). Un abattage suppose un board complet — "
+            "dérouler les rues manquantes avec advance_street.py (et VÉRIFIER son code retour) "
+            "avant d'appeler pc showdown."
+        )
+
+    if args.board is not None:
+        expected = parse_cards(_split_card_tokens(args.board))
+        if expected != state.board:
+            raise StateError(
+                f"--board {[str(c) for c in expected]} contredit le board de l'état "
+                f"{[str(c) for c in state.board]} — l'état canonique fait foi ; ne pas passer "
+                "--board avec --from-hand, ou corriger hand.json."
+            )
+
+    contesting = [s for s in state.seats if s.status in ("active", "allin")]
+    if len(contesting) < 2:
+        raise StateError(
+            f"un seul siège encore en lice ({[labels[s.seat] for s in contesting]}) — "
+            "le pot lui revient sans abattage, il n'y a pas de showdown à résoudre."
+        )
+
+    cards_by_seat: dict[int, list[Card]] = {s.seat: s.cards for s in contesting if s.cards}
+    named_on_cli: set[int] = set()
+
+    for entry in args.hand_entry or []:
+        name, cards = _parse_showdown_entry(entry)
+        seat = _seat_by_showdown_name(state, name)
+        if seat is None:
+            raise StateError(
+                f"{name!r} ne désigne aucun siège de cette main — noms acceptés : "
+                f"{sorted(labels.values())}, \"Hero\", ou un index de siège 0..{state.n_seats - 1}."
+            )
+        if state.seats[seat].status not in ("active", "allin"):
+            raise StateError(
+                f"{name!r} (siège {seat}) n'est plus en lice (status "
+                f"{state.seats[seat].status!r}) — une main couchée ne va pas à l'abattage."
+            )
+        if seat in named_on_cli:
+            # Sans ça, la seconde entrée écrasait silencieusement la première
+            # (dernier arrivé gagne) : deux mains contradictoires passées pour
+            # le même siège donnaient un résultat parfaitement cohérent... sur
+            # une seule des deux.
+            raise StateError(
+                f"siège {labels[seat]!r} renseigné deux fois — une seule entrée --hand par siège."
+            )
+        named_on_cli.add(seat)
+        known = state.seats[seat].cards
+        if known and known != cards:
+            raise StateError(
+                f"{name!r} : cartes {[str(c) for c in cards]} contredisent celles déjà connues "
+                f"dans hand.json {[str(c) for c in known]} — l'état canonique fait foi."
+            )
+        cards_by_seat[seat] = cards
+
+    # Un deck n'a qu'un exemplaire de chaque carte : `validate_and_load` le
+    # vérifie déjà pour tout ce qui est STOCKÉ dans hand.json, mais les cartes
+    # passées en argument échappent à cette validation -- deux joueurs à qui
+    # on prête le même as produiraient un abattage impeccablement résolu et
+    # matériellement impossible (même classe de bug que le board fantôme
+    # ci-dessus). Le chemin libre (sans --from-hand) reste une calculatrice
+    # brute et n'est volontairement pas touché.
+    seen: dict[tuple[str, str], str] = {(c.rank, c.suit): "board" for c in state.board}
+    for seat, cards in cards_by_seat.items():
+        for c in cards:
+            key = (c.rank, c.suit)
+            if key in seen:
+                raise StateError(
+                    f"carte {c} en double : déjà présente ({seen[key]}) — un abattage ne peut "
+                    "pas distribuer deux fois la même carte."
+                )
+            seen[key] = f"siège {labels[seat]}"
+
+    missing = [labels[s.seat] for s in contesting if s.seat not in cards_by_seat]
+    if missing:
+        raise StateError(
+            f"cartes inconnues pour {missing} — tous les sièges encore en lice doivent être "
+            "renseignés (dans hand.json, ou via --hand \"POSITION:C1,C2\"), sinon l'abattage "
+            "serait résolu entre une partie seulement des joueurs."
+        )
+
+    hands = [(labels[s.seat], cards_by_seat[s.seat]) for s in contesting]
+    seat_by_label = {labels[s.seat]: s.seat for s in contesting}
+    out = []
+    for r in showdown_mod.resolve(state.board, hands):
+        d = r.to_json()
+        d["seat"] = seat_by_label[r.name]
+        d["is_hero"] = seat_by_label[r.name] == state.hero_seat
+        out.append(d)
+
+    return {
+        "results": out,
+        # Le board réellement utilisé, repris de l'état : c'est CE champ qui
+        # rend une dérive visible dans la sortie elle-même, pas seulement
+        # dans le code retour.
+        "board": [str(c) for c in state.board],
+        "street": state.street,
+        "source": "hand.json",
+    }
+
+
 def cmd_showdown(args: argparse.Namespace) -> dict[str, Any]:
-    board = parse_cards(args.board.split(","))
-    hands = []
-    for h in args.hand_entry:
-        name, cards_str = h.split(":")
-        hands.append((name, parse_cards(cards_str.split(","))))
-    return {"results": [r.to_json() for r in showdown_mod.resolve(board, hands)]}
+    if args.from_hand is not None:
+        return _showdown_from_state(args)
+
+    if args.board is None:
+        raise StateError("--board est requis sans --from-hand (avec --from-hand, le board vient "
+                          "de l'état canonique)")
+    if not args.hand_entry:
+        raise StateError("au moins un --hand NOM:CARTES est requis")
+
+    board = parse_cards(_split_card_tokens(args.board))
+    hands = [_parse_showdown_entry(h) for h in args.hand_entry]
+    return {"results": [r.to_json() for r in showdown_mod.resolve(board, hands)],
+            "board": [str(c) for c in board], "source": "arguments"}
 
 
 def cmd_sizing(args: argparse.Namespace) -> dict[str, Any]:
@@ -466,6 +690,35 @@ def cmd_apply(args: argparse.Namespace) -> dict[str, Any]:
 
 # --- assert-state ----------------------------------------------------------
 
+def _state_divergences(state, *, street: str | None = None, board: str | None = None,
+                        to_act: int | None = None) -> list[str]:
+    """Compare l'état réel à ce que l'appelant CROIT être vrai et retourne la
+    liste des désaccords (vide si tout concorde). Factorisé entre
+    ``pc assert-state`` (tripwire dédié) et ``pc render --expect-*`` (même
+    tripwire, mais dans l'appel que le coach fait DÉJÀ avant chaque décision
+    -- cf. la note de ``cmd_render``)."""
+    errors: list[str] = []
+
+    if street is not None and state.street != street:
+        errors.append(f"street attendue {street!r}, état réel {state.street!r}")
+
+    if board is not None:
+        try:
+            expected_board = parse_cards(_split_card_tokens(board))
+        except CardError as exc:
+            raise StateError(f"board attendu invalide : {exc}") from exc
+        if expected_board != state.board:
+            errors.append(
+                f"board attendu {[str(c) for c in expected_board]}, "
+                f"état réel {[str(c) for c in state.board]}"
+            )
+
+    if to_act is not None and state.to_act != to_act:
+        errors.append(f"to_act attendu {to_act}, état réel {state.to_act}")
+
+    return errors
+
+
 def cmd_assert_state(args: argparse.Namespace) -> dict[str, Any]:
     """Tripwire mécanique contre la dérive coach/état (revue live-session) :
     le coach affiche parfois une table écrite à la main au lieu d'appeler
@@ -480,24 +733,7 @@ def cmd_assert_state(args: argparse.Namespace) -> dict[str, Any]:
     nul, `StateError`) au moindre désaccord plutôt que de laisser la
     session continuer sur une hypothèse fausse."""
     state = _load_state(args.hand)
-    errors: list[str] = []
-
-    if args.street is not None and state.street != args.street:
-        errors.append(f"street attendue {args.street!r}, état réel {state.street!r}")
-
-    if args.board is not None:
-        try:
-            expected_board = parse_cards([c for c in args.board.split(",") if c])
-        except CardError as exc:
-            raise StateError(f"--board invalide : {exc}") from exc
-        if expected_board != state.board:
-            errors.append(
-                f"board attendu {[str(c) for c in expected_board]}, "
-                f"état réel {[str(c) for c in state.board]}"
-            )
-
-    if args.to_act is not None and state.to_act != args.to_act:
-        errors.append(f"to_act attendu {args.to_act}, état réel {state.to_act}")
+    errors = _state_divergences(state, street=args.street, board=args.board, to_act=args.to_act)
 
     if errors:
         raise StateError("assert-state a échoué (l'état réel diverge de ce qui était attendu) : "
@@ -580,12 +816,27 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_brief)
 
     p = sub.add_parser("render", help="dessin ASCII de la table")
-    hand_arg(p); p.set_defaults(func=cmd_render)
+    hand_arg(p)
+    p.add_argument("--expect-street", default=None, choices=list(STREETS),
+                    help="échoue (code non nul) si l'état réel n'est pas sur cette rue — même "
+                         "tripwire que pc assert-state, mais dans l'appel déjà fait avant chaque "
+                         "décision, donc sans étape supplémentaire à ne pas oublier")
+    p.add_argument("--expect-board", default=None,
+                    help="échoue si le board réel diffère (cartes séparées par des virgules)")
+    p.set_defaults(func=cmd_render)
 
     p = sub.add_parser("showdown", help="résolution déterministe d'un abattage")
-    p.add_argument("--board", required=True)
-    p.add_argument("--hand", dest="hand_entry", action="append", required=True,
-                    metavar="NOM:CARTES", help="ex --hand Hero:Ac6h --hand HJ:KdTd")
+    p.add_argument("--from-hand", default=None, metavar="HAND.JSON",
+                    help="résout l'abattage DEPUIS l'état canonique : board et cartes connues "
+                         "repris de hand.json, échec bruyant si l'état n'est pas à la river ou "
+                         "si un argument le contredit. À privilégier en session — sans lui, "
+                         "pc showdown ne lit pas hand.json et résoudra un board qui n'a jamais "
+                         "existé (cf. cmd_showdown/_showdown_from_state)")
+    p.add_argument("--board", default=None,
+                    help="requis SANS --from-hand ; avec --from-hand, doit correspondre au board "
+                         "de l'état (sinon échec)")
+    p.add_argument("--hand", dest="hand_entry", action="append", default=None,
+                    metavar="NOM:CARTES", help="ex --hand Hero:Ac,6h --hand HJ:Kd,Td")
     p.set_defaults(func=cmd_showdown)
 
     p = sub.add_parser("sizing", help="calcul déterministe de %%pot / montant de relance")

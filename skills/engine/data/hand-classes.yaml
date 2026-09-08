@@ -21,7 +21,9 @@ meta:
 # la règle de combo (voir att-def-budgets.yaml).
 
 made_hand_classes:
-  # 15 classes, de la plus forte à la plus faible
+  # 16 classes, de la plus forte à la plus faible : les 15 de la source
+  # PokerSkill (annexe D.2) + `underpair`, ajoutée par le moteur (absente de
+  # la source -- voir sa définition ci-dessous pour le pourquoi).
   - id: nuts
     definition: >
       Full+ / couleur nut / quinte nut sur board sans couleur ni paire /
@@ -51,6 +53,17 @@ made_hand_classes:
     definition: Paire avec 2 surcartes au board.
   - id: fourth_fifth_pair
     definition: Paire avec 3 ou 4 surcartes au board.
+  - id: underpair
+    definition: >
+      Paire de poche STRICTEMENT sous toutes les cartes du board (ne touche
+      aucun rang du board). Absente de la taxonomie source à 15 classes
+      (PokerSkill, annexe D.2) -- ajoutée ici (rapport de bug live-session
+      #4) : le moteur classait ce cas dans `weak_showdown` en le signalant
+      lui-même comme "non couvert par la taxonomie", alors que c'est une
+      classe très fréquente (tout set-mining raté, ~7 fois sur 8). Budgets
+      ATT/DEF réutilisés de `weak_showdown` (même profil de showdown
+      marginal) faute de calibration dédiée dans l'annexe E -- curseur, pas
+      une vérité figée, cf. att-def-budgets.yaml.
   - id: nuts_high
     definition: Carte haute la plus élevée non présente au board (typiquement A-high). Meilleure non-paire au showdown.
   - id: second_high

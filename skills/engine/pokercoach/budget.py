@@ -230,7 +230,11 @@ def _base_made_hands(hc: HandClass, pot_type: str, texture: Texture) -> tuple[fl
         deff = (rng["min"] + rng["max"]) / 2
         return _as_float(node.get("att", 0.0)), deff
 
-    if made == "weak_showdown":
+    if made in ("weak_showdown", "underpair"):
+        # `underpair` (paire de poche sous le board, cf. rapport de bug
+        # live-session #4) réutilise la baseline de `weak_showdown` -- même
+        # profil de showdown marginal, aucune calibration dédiée dans
+        # l'annexe E source (curseur, pas une vérité figée).
         node = table["weak_showdown"]["by_pot_type"]
         key = "three_bet_pot" if pot_type == "three_bet_pot" else ("four_bet_pot" if pot_type == "four_bet_pot" else "limp_srp")
         return _leaf(node[key])
@@ -260,7 +264,7 @@ def _apply_texture_penalties(att: float, deff: float, made: str, texture: Textur
     mods = _texture_mods()["pair_class_penalties"]
     notes: list[str] = []
     pair_family = ("overpair", "top_pair", "second_pair", "third_pair", "fourth_fifth_pair",
-                   "weak_showdown", "nuts_high", "second_high")
+                   "weak_showdown", "underpair", "nuts_high", "second_high")
     if made not in pair_family:
         return att, deff, notes
 
@@ -370,7 +374,7 @@ def compute(hc: HandClass, texture: Texture, *, pot_type: str, street: str,
 
     att, deff, mw_removed = _apply_multiway(att, deff, hc.made, hc.draw, n_opponents_active)
 
-    is_bluff_line = hc.made in ("trash", "weak_showdown") or hc.draw is not None
+    is_bluff_line = hc.made in ("trash", "weak_showdown", "underpair") or hc.draw is not None
     street_index = STREET_INDEX.get(street, 0)
     att, exploit_removed, exploit_notes = _apply_exploit_gate(
         att, hc.made, hc.draw, villain_archetype, is_bluff_line, street_index)
