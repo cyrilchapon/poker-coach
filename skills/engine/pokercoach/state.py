@@ -82,7 +82,10 @@ class HandState:
     big_blind: float
     ante: float
     hero_seat: int
-    to_act: int
+    # ``None`` : plus aucun siège n'est ``active``, donc plus personne à qui
+    # donner la parole — all-in callé (runout) ou tapis couché par tout le
+    # monde. Cf. ``is_runout`` et la validation de ``to_act``.
+    to_act: int | None
     street: str
     board: list[Card]
     streets: dict[str, dict[str, Any]]
@@ -228,11 +231,36 @@ def validate_and_load(raw: dict[str, Any]) -> HandState:
 
     hero_seat = next(s.seat for s in seats if s.is_hero)
 
+    # ``to_act`` : un siège actif, ou ``None`` quand plus AUCUN siège ne peut
+    # agir. Deux états terminaux légitimes tombent dans ce cas : le RUNOUT
+    # (au moins deux sièges en lice, tous all-in : il ne reste que des cartes
+    # à distribuer puis un abattage — cf. ``is_runout``) et la main déjà
+    # décidée (un tapis que tout le monde a couché). Sans ce cas, un all-in
+    # callé n'avait aucune représentation valide : plus aucun siège n'était
+    # 'active', donc tout entier était refusé par le contrôle ci-dessous, et
+    # ``to_act: null`` l'était aussi -- ``pc render``/``assert-state``/
+    # ``showdown --from-hand`` rejetaient l'état, et la seule issue en
+    # session était de remettre des statuts à la main dans hand.json,
+    # c-à-d exactement ce que les garde-fous anti-dérive interdisent.
+    # Ce qui distingue les deux états terminaux n'est PAS validé ici : c'est
+    # ``advance_street.py`` (« la main est déjà décidée, pas de rue suivante »)
+    # et ``pc showdown --from-hand`` (« un seul siège en lice, pas
+    # d'abattage ») qui refusent le mauvais, avec un message qui dit quoi
+    # faire à la place.
     to_act = raw.get("to_act")
-    _require(isinstance(to_act, int) and 0 <= to_act < n_seats,
-              f"to_act invalide : {to_act!r}")
-    _require(seats[to_act].status == "active",
-              f"to_act (siège {to_act}) n'est pas 'active' (status={seats[to_act].status!r})")
+    active_seats = [s.seat for s in seats if s.status == "active"]
+    if to_act is None:
+        _require(not active_seats,
+                  f"to_act invalide : null ne vaut que si plus aucun siège ne peut agir, "
+                  f"or le(s) siège(s) {active_seats} sont encore 'active'")
+    else:
+        _require(isinstance(to_act, int) and 0 <= to_act < n_seats,
+                  f"to_act invalide : {to_act!r}")
+        _require(seats[to_act].status == "active",
+                  f"to_act (siège {to_act}) n'est pas 'active' (status={seats[to_act].status!r})"
+                  + ("" if active_seats else
+                     " — aucun siège n'est 'active' : si tous les sièges en lice sont all-in, "
+                     "c'est un runout, et to_act doit valoir null"))
 
     declared_hero_seat = raw.get("hero_seat")
     if declared_hero_seat is not None:
@@ -355,6 +383,8 @@ def seats_still_to_act(state: HandState, *, seat: int | None = None) -> list[int
     pot, mais plus dans l'ordre de parole).
     """
     seat = state.to_act if seat is None else seat
+    if seat is None:
+        return []  # plus aucun siège actif : personne derrière personne
     actions = state.streets[state.street]["actions"]
 
     max_committed = max(
@@ -417,7 +447,18 @@ def players_to_act_behind(state: HandState, *, seat: int | None = None) -> int:
 def hero_closes_action(state: HandState) -> bool:
     """``True`` si ``to_act`` est le dernier siège encore actif à parler sur
     la rue courante (aucun joueur actif derrière lui) -- dérivé booléen de
-    ``players_to_act_behind`` pour simplifier l'usage côté skill."""
+    ``players_to_act_behind`` pour simplifier l'usage côté skill.
+
+    ``False`` quand plus personne ne peut agir (runout, ou ``to_act`` à
+    ``None`` sur une main déjà décidée) : il n'y a plus d'action du tout,
+    donc le héros n'en « ferme » aucune. La lecture mécanique
+    (``players_to_act_behind == 0``) y répondrait ``True``, ce qui se lit
+    « c'est au héros de conclure la rue » -- l'inverse de la réalité. Le
+    champ ``runout`` de ``pc state``/``pc render`` est ce qui distingue les
+    deux cas, pas ce booléen.
+    """
+    if state.to_act is None or is_runout(state):
+        return False
     return players_to_act_behind(state) == 0
 
 
@@ -470,7 +511,16 @@ def remaining_stack(state: HandState, seat: int) -> float:
 
 def to_call(state: HandState, *, seat: int | None = None) -> float:
     """Montant que ``seat`` (par défaut ``to_act``) doit ajouter pour suivre
-    la mise la plus haute déjà engagée sur la rue courante."""
+    la mise la plus haute déjà engagée sur la rue courante.
+
+    ``0.0`` quand ``to_act`` vaut ``None`` (plus aucun siège ne peut agir) :
+    personne n'a rien à suivre. Sans ce cas, le siège ``None`` ne
+    correspondait à aucune action de la rue -- sa contribution tombait à 0 et
+    ``to_call`` renvoyait la mise maximale, un montant « à suivre »
+    entièrement fictif.
+    """
+    if seat is None and state.to_act is None:
+        return 0.0
     seat = state.to_act if seat is None else seat
     node = state.streets[state.street]
     max_committed = max(
@@ -484,6 +534,39 @@ def to_call(state: HandState, *, seat: int | None = None) -> float:
 def players_active(state: HandState) -> int:
     """Sièges encore en lice pour le pot (actifs ou all-in), fold/out exclus."""
     return sum(1 for s in state.seats if s.status in ("active", "allin"))
+
+
+def is_runout(state: HandState) -> bool:
+    """La main est-elle en RUNOUT : au moins deux sièges encore en lice, et
+    plus aucune décision à prendre ?
+
+    C'est l'état d'un all-in callé : il ne reste que des cartes à distribuer
+    (``advance_street.py``) jusqu'à l'abattage (``pc showdown``).
+
+    Deux formes, à ne pas confondre — la seconde est celle qu'on rate :
+    - plus AUCUN siège actif (tous les sièges en lice sont all-in) :
+      ``to_act`` vaut alors ``None`` ;
+    - UN seul siège actif, dont la mise est déjà égalée, face à des tapis :
+      il ne peut ni suivre (rien à suivre) ni miser (personne pour payer),
+      mais il reste ``active``, donc ``to_act`` pointe encore sur lui. Sans
+      ce second cas, ``pc brief`` conseillait volontiers « une décision » au
+      héros quand c'est lui le payeur le plus profond -- une décision qui
+      n'existe pas.
+
+    Dérivé des statuts et de l'historique, jamais stocké — comme le reste
+    ici (positions, format, pot). Un champ ``runout: true`` dans
+    ``hand.json`` serait une seconde source de vérité, libre de contredire
+    ``seats[].status`` ; ``to_act: null`` en est la conséquence validée,
+    pas une donnée indépendante.
+    """
+    if players_active(state) < 2:
+        return False  # main déjà décidée (tapis couché par tout le monde), pas un runout
+    active = [s.seat for s in state.seats if s.status == "active"]
+    if not active:
+        return True
+    if len(active) > 1:
+        return False  # au moins deux sièges peuvent encore se répondre
+    return to_call(state, seat=active[0]) <= 0
 
 
 def n_defenders(state: HandState) -> int:
@@ -528,8 +611,9 @@ class DerivedState:
     board: list[Card]
     hero_seat: int
     hero_position: str
-    to_act: int
-    to_act_position: str
+    to_act: int | None
+    to_act_position: str | None
+    runout: bool
     pot: float
     to_call: float
     pot_odds: float | None
@@ -560,6 +644,14 @@ class DerivedState:
             "hero_position": self.hero_position,
             "to_act": self.to_act,
             "to_act_position": self.to_act_position,
+            # Plus aucune décision à prendre : all-in callé. `to_act` seul
+            # ne suffit pas à le dire -- `null` se lit aussi bien « personne
+            # ne parle » que « champ manquant », et il peut même pointer
+            # encore sur un siège (le payeur le plus profond, resté
+            # `active`). Ce booléen tranche, et c'est lui qui explique
+            # pourquoi `hero_closes_action` vaut `false` alors que plus
+            # personne n'a à parler derrière le héros.
+            "runout": self.runout,
             "pot": round(self.pot, 4),
             "to_call": round(self.to_call, 4),
             "pot_odds": None if self.pot_odds is None else round(self.pot_odds, 4),
@@ -627,7 +719,8 @@ def derive(state: HandState) -> DerivedState:
         hero_seat=state.hero_seat,
         hero_position=labels[state.hero_seat],
         to_act=state.to_act,
-        to_act_position=labels[state.to_act],
+        to_act_position=None if state.to_act is None else labels[state.to_act],
+        runout=is_runout(state),
         pot=p,
         to_call=call,
         pot_odds=pot_odds,

@@ -572,3 +572,95 @@ def test_render_expect_board_fails_loudly_on_drift(capsys):
     code, _, err = run(["render", "--hand", HAND, "--expect-board", "A♠,A♥,A♦"], capsys)
     assert code == 1
     assert "board attendu" in err
+
+
+# --- runout (all-in callé) -------------------------------------------------
+
+RUNOUT_HAND = str(FIXTURES / "hu_flop_allin_called_runout.json")
+
+
+def test_cli_apply_writes_to_act_null_when_the_allin_is_called(capsys, tmp_path):
+    # Regression : `cmd_apply` n'écrivait `to_act` que si un siège actif
+    # restait (`if next_seat is not None`). Le call all-in laissait donc
+    # `to_act` sur le siège qui venait de faire tapis -- un état que
+    # `validate_and_load` refuse -- et `pc apply` échouait SANS écrire
+    # l'action qu'on venait de lui demander d'appliquer.
+    hand = json.loads(Path(HAND).read_text())
+    hand["streets"]["flop"]["actions"] = [
+        {"seat": 1, "action": "bet", "amount": 4.0},
+        {"seat": 0, "action": "allin", "amount": 97.0},
+    ]
+    hand["seats"][0]["status"] = "allin"
+    hand["to_act"] = 1
+    p = tmp_path / "h.json"
+    p.write_text(json.dumps(hand))
+
+    code, out, err = run(["apply", "--hand", str(p), "--action", "a"], capsys)
+    assert code == 0, err
+    assert json.loads(p.read_text())["to_act"] is None
+    parsed = json.loads(out)
+    assert parsed["to_act"] is None and parsed["runout"] is True
+    assert parsed["applied_to"] == {"seat": 1, "position": "BB",
+                                     "action": "allin", "amount": 97.0}
+
+
+def test_cli_render_and_assert_state_accept_a_runout(capsys):
+    code, out, err = run(["render", "--hand", RUNOUT_HAND, "--expect-street", "flop"], capsys)
+    assert code == 0, err
+    assert json.loads(out)["state"]["runout"] is True
+
+    code, out, err = run(["assert-state", "--hand", RUNOUT_HAND, "--street", "flop"], capsys)
+    assert code == 0, err
+    parsed = json.loads(out)
+    assert parsed["ok"] is True
+    # `to_act: null` seul se lit aussi bien "personne ne parle" que "champ
+    # absent" -- le booléen dit lequel.
+    assert parsed["to_act"] is None and parsed["runout"] is True
+
+
+def test_cli_apply_brief_and_budget_refuse_a_runout(capsys, tmp_path):
+    p = tmp_path / "h.json"
+    original = Path(RUNOUT_HAND).read_text()
+    p.write_text(original)
+    for argv in (["apply", "--hand", str(p), "--action", "x"],
+                 ["brief", "--hand", str(p)],
+                 ["budget", "--hand", str(p)]):
+        code, out, err = run(argv, capsys)
+        assert code == 1, argv
+        assert "runout" in err, (argv, err)
+    assert p.read_text() == original
+
+
+def test_cli_brief_refuses_a_runout_where_the_hero_is_still_the_active_seat(capsys, tmp_path):
+    # Le héros a callé le tapis avec le stack le plus profond : il reste
+    # "active" et `to_act` pointe sur lui, mais il n'a plus aucune décision à
+    # prendre. Sans la garde runout, `pc brief` déroulait ses gates jusqu'à un
+    # verdict sur une décision qui n'existe pas.
+    hand = json.loads(Path(RUNOUT_HAND).read_text())
+    hand["seats"][0]["stack"] = 200.0
+    hand["seats"][0]["status"] = "active"
+    hand["streets"]["flop"]["actions"] = [
+        {"seat": 1, "action": "bet", "amount": 4.0},
+        {"seat": 1, "action": "allin", "amount": 97.0},
+        {"seat": 0, "action": "call", "amount": 97.0},
+    ]
+    hand["to_act"] = 0
+    p = tmp_path / "h.json"
+    p.write_text(json.dumps(hand))
+    code, out, err = run(["brief", "--hand", str(p)], capsys)
+    assert code == 1
+    assert "runout" in err
+
+
+def test_cli_showdown_from_hand_resolves_a_runout_at_the_river(capsys, tmp_path):
+    # Le bout de chaîne que les deux blocages rendaient inatteignable sans
+    # retoucher hand.json à la main.
+    hand = json.loads(Path(RUNOUT_HAND).read_text())
+    hand["streets"]["turn"] = {"board": ["T♠", "9♥", "2♣", "5♦"], "actions": []}
+    hand["streets"]["river"] = {"board": ["T♠", "9♥", "2♣", "5♦", "8♥"], "actions": []}
+    p = tmp_path / "h.json"
+    p.write_text(json.dumps(hand, ensure_ascii=False))
+    code, out, err = run(["showdown", "--from-hand", str(p), "--hand", "BB:K♣,Q♣"], capsys)
+    assert code == 0, err
+    results = {r["name"]: r["result"] for r in json.loads(out)["results"]}
+    assert results == {"BTN/SB": "win", "BB": "lose"}

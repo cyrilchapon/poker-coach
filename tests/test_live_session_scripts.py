@@ -155,6 +155,63 @@ def test_advance_opens_the_next_street_with_correct_board_and_to_act():
     assert updated["to_act"] == 1
 
 
+def test_advance_deals_the_runout_of_a_called_allin():
+    # Regression (revue live-session) : `_action_is_closed` refusait toute rue
+    # sans action ("aucune action enregistrée — rien à clore"), or c'est le
+    # cas NORMAL d'un runout : après un all-in callé, plus personne n'a de
+    # décision à prendre, donc la rue est close par construction. Impossible
+    # de dérouler le board ; le contournement en session (remettre les
+    # statuts à "active" et écrire le nœud de rue à la main dans hand.json)
+    # contredit frontalement les garde-fous anti-dérive de la skill.
+    raw = load_fixture("hu_flop_allin_called_runout.json")
+
+    turn = advance_street.advance(copy.deepcopy(raw), "5♦")
+    assert turn["streets"]["turn"]["board"] == ["T♠", "9♥", "2♣", "5♦"]
+    assert turn["to_act"] is None  # personne à qui donner la parole
+    validate_and_load(turn)  # l'état produit doit être valide tel quel
+
+    river = advance_street.advance(turn, "8♥")
+    assert river["streets"]["river"]["board"] == ["T♠", "9♥", "2♣", "5♦", "8♥"]
+    assert river["to_act"] is None
+    validate_and_load(river)
+
+
+def test_advance_deals_the_runout_when_the_deepest_caller_is_still_active():
+    # Seconde forme du runout : le payeur le plus profond n'a pas fait tapis
+    # lui-même, il reste donc "active" -- une rue sans action ET un siège
+    # actif, que l'ancienne garde refusait aussi ("n'ont pas encore agi"),
+    # alors que ce siège n'a personne à qui répondre.
+    raw = load_fixture("hu_flop_allin_called_runout.json")
+    raw["seats"][0]["stack"] = 200.0
+    raw["seats"][0]["status"] = "active"
+    raw["streets"]["flop"]["actions"] = [
+        {"seat": 1, "action": "bet", "amount": 4.0},
+        {"seat": 1, "action": "allin", "amount": 97.0},
+        {"seat": 0, "action": "call", "amount": 97.0},
+    ]
+    raw["to_act"] = 0
+
+    turn = advance_street.advance(raw, "5♦")
+    assert turn["streets"]["turn"]["board"] == ["T♠", "9♥", "2♣", "5♦"]
+    assert turn["to_act"] == 0  # le seul siège actif, même s'il ne peut rien faire
+    validate_and_load(turn)
+
+
+def test_advance_still_rejects_a_lone_active_seat_that_owes_a_call():
+    # La contrepartie de la règle ci-dessus : un tapis PAS ENCORE égalé
+    # laisse bel et bien une décision à prendre (suivre ou coucher), même
+    # avec un seul siège actif. Ouvrir la rue ici sauterait par-dessus la
+    # décision du héros -- la classe de bug que ce script existe pour rendre
+    # impossible.
+    raw = load_fixture("hu_flop_cbet.json")
+    raw = copy.deepcopy(raw)
+    raw["streets"]["flop"]["actions"] = [{"seat": 1, "action": "allin", "amount": 97.0}]
+    raw["seats"][1]["status"] = "allin"
+    raw["to_act"] = 0
+    with pytest.raises(StateError, match="non close"):
+        advance_street.advance(raw, "5♦")
+
+
 def test_advance_rejects_wrong_card_count():
     raw = load_fixture("hu_flop_cbet.json")
     raw = copy.deepcopy(raw)

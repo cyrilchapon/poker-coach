@@ -2,7 +2,9 @@
 cartes distribuées, remet les actions de la nouvelle rue à vide, et pointe
 ``to_act`` sur le premier siège actif dans l'ordre de parole postflop
 (la SB en premier, le bouton en dernier — cf. ``pokercoach.state.
-postflop_acting_order_offsets``).
+postflop_acting_order_offsets``), ou sur ``None`` en runout (tous les sièges
+encore en lice sont all-in : plus aucune décision à prendre, seules les
+cartes restent à distribuer — cf. ``pokercoach.state.is_runout``).
 
 Volontairement HORS du cœur ``pokercoach`` : c'est une commodité de session
 (live-session, ou toute simulation main par main), pas une brique du moteur
@@ -43,15 +45,24 @@ NEXT_STREET = {"preflop": "flop", "flop": "turn", "turn": "river"}
 
 def _action_is_closed(state) -> None:
     """Tous les sièges encore ACTIFS (ni fold, ni all-in, ni out) doivent
-    avoir égalé la mise la plus haute de la rue courante, ET avoir tous
-    agi au moins une fois sur cette rue (l'égalité seule ne suffit pas :
-    ``[0.0, 0.0]`` est trivialement "égale" même quand un seul des deux
-    sièges a effectivement parlé). Les sièges all-in sont exclus de cette
-    égalité (un tapis pour moins que la mise en cours est légitime — side
-    pots, simplification connue ailleurs, pas ici)."""
+    avoir égalé la mise la plus haute de la rue courante, ET — dès qu'ils
+    sont au moins deux à pouvoir se répondre — avoir tous agi au moins une
+    fois sur cette rue (l'égalité seule ne suffit pas : ``[0.0, 0.0]`` est
+    trivialement "égale" même quand un seul des deux sièges a effectivement
+    parlé). Les sièges all-in sont exclus de cette égalité (un tapis pour
+    moins que la mise en cours est légitime — side pots, simplification
+    connue ailleurs, pas ici).
+
+    Une rue sans aucune action n'est PAS forcément une rue non close : après
+    un all-in callé, il ne reste plus personne à qui la parole puisse
+    revenir. C'est le cas normal d'un runout — la rue est close *par
+    construction*, et la refuser (« aucune action enregistrée — rien à
+    clore ») bloquait le déroulé du board, sans autre issue en session que
+    de retoucher ``hand.json`` à la main, exactement ce que les garde-fous
+    anti-dérive interdisent. Le critère est donc « reste-t-il une décision à
+    prendre ? », pas « la rue a-t-elle des actions ? ».
+    """
     node = state.streets[state.street]
-    if not node["actions"]:
-        raise StateError(f"aucune action enregistrée sur {state.street} — rien à clore")
 
     # Un pot n'est contesté (au sens "il reste une décision à prendre ou un
     # showdown à faire") que s'il reste au moins deux sièges non-foldés
@@ -67,6 +78,28 @@ def _action_is_closed(state) -> None:
 
     active_seats = [s.seat for s in state.seats if s.status == "active"]
 
+    # Une mise non égalée laisse toujours une décision à prendre (suivre,
+    # relancer ou se coucher) — y compris au dernier siège actif face à un
+    # tapis adverse. Contrôlé avant tout le reste : c'est le seul cas où un
+    # siège seul en lice DOIT encore parler.
+    max_committed = max(
+        (street_contribution(state, state.street, s) for s in contesting_seats),
+        default=0.0,
+    )
+    unmatched = [s for s in active_seats
+                 if street_contribution(state, state.street, s) < max_committed]
+    if unmatched:
+        raise StateError(
+            f"action non close sur {state.street} : siège(s) {unmatched} n'ont pas égalé "
+            f"la mise la plus haute ({max_committed:g}) — il manque une décision"
+        )
+
+    if len(active_seats) < 2:
+        # Runout : plus aucun siège ne peut se voir rendre la parole (tous
+        # all-in, ou un seul actif dont la mise est déjà égalée par des
+        # tapis). Rien à clore parce que rien ne peut plus s'ouvrir.
+        return
+
     # Un ``post`` (blinde préflop) n'est pas une action volontaire : il ne
     # compte pas comme "avoir agi" au sens de la clôture de rue.
     acted_seats = {a["seat"] for a in node["actions"] if a["action"] != "post"}
@@ -74,13 +107,6 @@ def _action_is_closed(state) -> None:
     if missing:
         raise StateError(
             f"action non close sur {state.street} : siège(s) {missing} n'ont pas encore agi"
-        )
-
-    active_contributions = [street_contribution(state, state.street, s) for s in active_seats]
-    if len(set(active_contributions)) > 1:
-        raise StateError(
-            f"action non close sur {state.street} : contributions inégales "
-            f"parmi les sièges actifs ({active_contributions}) — il manque une action"
         )
 
 
@@ -124,10 +150,14 @@ def advance(raw: dict, deal_str: str) -> dict:
     active_by_offset = {
         (s.seat - state.button_seat) % n: s.seat for s in state.seats if s.status == "active"
     }
-    next_seat = next((active_by_offset[o] for o in order if o in active_by_offset), None)
-    if next_seat is None:
-        raise StateError("aucun siège actif ne peut agir sur la nouvelle rue (tous fold/all-in/out)")
-    raw["to_act"] = next_seat
+    # ``None`` = runout : tous les sièges encore en lice sont all-in, la
+    # nouvelle rue n'a aucun siège à qui donner la parole. C'est un état
+    # terminal VALIDE (cf. ``state.is_runout``), pas une erreur -- le refuser
+    # ici était le second blocage du déroulé d'un all-in callé. Le cas « plus
+    # personne en lice du tout » est déjà écarté par ``_action_is_closed``.
+    raw["to_act"] = next(
+        (active_by_offset[o] for o in order if o in active_by_offset), None
+    )
 
     return raw
 
