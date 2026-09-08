@@ -145,7 +145,26 @@ def main() -> int:
     try:
         updated = advance(raw, args.deal)
     except StateError as exc:
+        # Revue live-session #6 : le code retour non nul suffit... à condition
+        # d'être lu. En session il ne l'a pas été, et les appels suivants
+        # (`pc render`, `pc brief`, `pc showdown`) ont continué sur le dernier
+        # état valide -- toujours la rue PRÉCÉDENTE -- sans que rien ne le
+        # signale, jusqu'à un showdown de river complet et cohérent en
+        # apparence sur un board qui n'existait pas. On nomme donc la
+        # conséquence ici, au moment exact où le piège se referme, plutôt que
+        # de laisser le seul code retour la porter.
         print(f"error: {exc}", file=sys.stderr)
+        try:
+            unchanged = derive(validate_and_load(raw))
+            print(
+                f"error: hand.json est INCHANGÉ — toujours sur {unchanged.street!r} "
+                f"(board {[str(c) for c in unchanged.board]}). Ne pas narrer la rue suivante : "
+                "tout pc render/brief/showdown appelé maintenant décrira CETTE rue-là. "
+                "Corriger la cause ci-dessus, relancer, et ne continuer qu'au code retour 0.",
+                file=sys.stderr,
+            )
+        except StateError:
+            pass  # état déjà invalide en entrée : le message principal suffit
         return 1
 
     out_path = args.out or args.hand

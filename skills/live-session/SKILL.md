@@ -77,6 +77,8 @@ Constat de session (revue live-session) : deux décisions du Héros ont été pr
 - **Ne jamais afficher un rendu de table qui ne provienne pas d'un appel réel à `scripts/pc render`.** Aucun tableau, grille ou récapitulatif de table écrit à la main, même pour "gagner du temps" sur une transition triviale.
 - **Toute transition de rue passe par `scripts/advance_street.py` avant tout rendu ou toute narration de cette rue** — jamais l'inverse. Distribuer une carte en prose sans l'avoir d'abord actée dans `hand.json` est exactement le bug constaté.
 - `pc render` et `pc state`/`pc brief` renvoient désormais un en-tête d'état structuré (`state.street`, `state.board`, en plus du dessin ASCII) dérivé de la même source — un désaccord entre ce qui est affiché au joueur et ce que ces champs disent est le signal que quelque chose a dérivé.
+- **Toujours vérifier le code retour d'`advance_street.py` avant l'appel suivant.** Un échec (code non nul) laisse `hand.json` **inchangé, sur la rue précédente** : tout `pc render`/`pc brief`/`pc showdown` appelé ensuite décrira cette rue-là, sans se plaindre. Constat de session : un `advance_street.py` en échec ignoré a produit un showdown de river complet et cohérent en apparence sur un board qui n'existait pas. En cas d'échec : corriger la cause, relancer, ne continuer qu'au code retour 0 — jamais narrer la nouvelle rue « en attendant ».
+- **Annoncer la rue attendue dans l'appel lui-même** plutôt que de compter sur sa propre vigilance : `scripts/pc render --hand hand.json --expect-street turn` échoue sans rien dessiner si l'état réel n'est pas sur cette rue. C'est le même tripwire que `pc assert-state`, mais dans l'appel qui est **déjà** fait avant chaque décision — donc sans étape supplémentaire à ne pas oublier.
 - **En cas de doute** (reprise de session après une pause, main longue, ou simple prudence) : `scripts/pc assert-state --hand hand.json --street <rue attendue> [--board <cartes attendues>]` avant d'annoncer une nouvelle rue ou de reprendre la main — échoue bruyamment (code non nul) si l'état réel diverge, plutôt que de laisser la session continuer sur une hypothèse fausse.
 
 ## Timing des adversaires (tell principal en ligne — en prose, pas dans le rendu)
@@ -106,10 +108,12 @@ Ces deux scripts sont volontairement hors du moteur `pokercoach` (voir la note e
 ## Résolution des showdowns — obligatoire, jamais à l'œil
 
 ```bash
-scripts/pc showdown --board "<5 cartes séparées par des virgules>" --hand "Hero:<2 cartes>" --hand "<Position>:<2 cartes>"
+scripts/pc showdown --from-hand hand.json --hand "<Position>:<2 cartes>"
 ```
 
 Aucune exception, même quand le résultat semble évident — une erreur d'évaluation manuelle casse la confiance dans l'outil entier, un calcul déterministe ne se trompe jamais sur ce point.
+
+**Toujours `--from-hand` en session.** Le board et les cartes déjà connues viennent alors de `hand.json` (l'état canonique fait foi), et l'appel échoue bruyamment si l'état n'est pas réellement à la river, si un argument le contredit, ou s'il manque un joueur encore en lice. Sans `--from-hand`, `pc showdown` ne lit pas `hand.json` du tout : c'est une calculatrice à arguments libres (utile pour un « qu'est-ce qui bat quoi ? » hors main), et elle résoudra tout aussi volontiers un board qui n'a jamais existé — c'est exactement comme ça qu'un showdown de river fictif a été produit en session. Les positions révélées par les villains se passent en plus (`--hand "CO:K♦,T♦"`) ; celles du Héros et de tout siège déjà renseigné dans `hand.json` n'ont pas à être répétées.
 
 ## Déroulé d'une main
 
