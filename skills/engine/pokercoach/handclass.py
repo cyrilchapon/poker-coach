@@ -26,7 +26,16 @@ cf. references/03-multiway-generalization.md :
   couleur, ouverture de la quinte, somme des rangs pour les surcartes) —
   pas de détection des combinaisons "backdoor". Les ``outs`` restent EXACTS
   (comptage réel par amélioration stricte du score, méthode déjà validée en
-  v1 dans ``equity-engine/scripts/describe_hand.py``).
+  v1 dans ``equity-engine/scripts/describe_hand.py``) — mais "exact" ne veut
+  dire ici que "chaque carte comptée améliore RÉELLEMENT la catégorie du
+  héros" (cf. ``_count_outs``), pas "chaque carte comptée gagne la main au
+  showdown". Aucune décote pour un out mort (qui améliore le héros ET donne
+  à un adversaire encore mieux — ex. la carte qui complète la quinte du
+  héros mais apparie aussi la couleur adverse) ou empoisonné (qui complète
+  une main moyenne battue par une main encore meilleure dans la range
+  adverse). Ce jugement demande de raisonner sur la range adverse, hors de
+  portée d'un comptage mécanique sur les seules cartes connues — à faire
+  porter par le gate qualitatif (G5 / decision-factors), pas par ce module.
 - **distance_to_boundary** n'est calculé (0.15 vs 1.0) que pour la famille
   paire simple, en comparant le kicker à la frontière de bucket la plus
   proche. Ailleurs, valeur par défaut 1.0 (pas de signal de proximité).

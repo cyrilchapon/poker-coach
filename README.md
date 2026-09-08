@@ -440,6 +440,117 @@ Still open:
   suggests). Fine as the basis for `top_pct_range()`'s approximate slicing,
   not a substitute for real range construction.
 
+## Live-session test report v1: findings and fixes
+
+A quick real-session test surfaced four issues. Two were clear bugs, fixed
+and covered by a new regression test each; two were genuine gaps in what
+the engine models, documented rather than papered over with an unreviewed
+threshold:
+
+- **`pc render` dropped `seat.status`, so a folded seat became invisible
+  once play moved to the next street.** `cmd_render`'s `seat_dict()` never
+  passed `status` through at all, and a seat's `action` only ever reflects
+  the CURRENT street's actions — a seat that folded on the flop has no
+  action to show on the turn, making it indistinguishable from a seat that
+  simply hasn't acted yet. Fixed: `seat_dict()` now includes `status`, and
+  `render()` falls back to `"fold"` for a seat with no action on the street
+  being drawn but `status == "folded"`.
+- **The GTO glossary had no entry for implied odds or reverse implied
+  odds**, despite both terms being used directly by the `decision-factors`
+  skill (loaded by gate G5). Added both definitions to `glossary.py` and to
+  the term list in `gto-glossary/SKILL.md`.
+- **`att-def-budgets.yaml` has no implied-odds term at all** — the DEF
+  budget of a draw is only ever the pressure already faced, never what a
+  completed draw could still extract from (or lose to) the remaining
+  stacks. This is exactly where a DEF-exhausted fold is most likely to be
+  too conservative: a draw, multiway, against opponents who pay wide. The
+  gate threshold itself is a user-owned cursor (see `gates.py`'s own
+  docstring on this) and wasn't changed without real session data to
+  calibrate it — but `budget.compute()` now attaches a note to exactly this
+  situation (draw + DEF-exhausted fold + 2+ active opponents) so the coach
+  surfaces the gap instead of handing back a bare "budget insuffisant".
+- **`hand.outs` counts real category-jumping cards, not equity-weighted
+  ones — it has no notion of a dead or poisoned out.** On the reported
+  spot (an open-ended draw plus a pairing card on a three-flush board,
+  multiway) the count included cards that also complete a made hand for an
+  opponent's range, or that pair a rank without actually giving the best
+  hand. Distinguishing those requires reasoning about the opponents'
+  ranges, which is out of scope for a mechanical count over the known
+  cards alone — `handclass.py`'s docstring now says so explicitly, so
+  `outs` isn't mistaken for an equity-adjusted number. Judging live-outs
+  quality stays a G5/`decision-factors` job.
+
+## Live-session test report v2: findings and fixes
+
+A second real-session test (4 hands, `live-session` on claude.ai) surfaced
+six more issues, ranked by the report itself from most to least severe:
+
+- **Stacks were never debited mid-hand.** `pc apply`/`advance_street.py`
+  never touched `seats[].stack` — only `new_hand.py` reconciles it, at the
+  end of a hand. `pc render` read that raw, stale field directly, so it
+  kept showing pre-hand stacks (e.g. 100.0bb/100.0bb) through a 46bb pot,
+  while `pc state`/`pc brief`'s `effective_stack` (correctly derived via
+  `remaining_stack`) disagreed with it. Fixed by making `cmd_render` derive
+  the same way instead of debiting the stored field — one source of truth,
+  not two mechanisms that have to be kept in sync by hand.
+- **No sizing on preflop decisions.** G1 could render `verdict:
+  raise_or_call, confidence: strong` on an opening or isolation decision
+  with nothing chiffré — sizing had no gate of its own to live in; it isn't
+  a grey-zone judgment call, just a formula nobody had wired up yet. Added
+  `sizing.preflop_open_to()` (3bb base + 1bb/limper, plus an exploit bump
+  vs. calling stations/fish — same cursor status as the codebase's other
+  documented factors), wired into `pc brief`'s preflop branch whenever the
+  closing verdict includes a raise, and exposed standalone as
+  `pc sizing preflop-open-to`.
+- **The exploit adjustment never reached `vs_rfi`.** `--villain-archetype`
+  was accepted by `pc brief`, correctly drove the G4 exploit flags, but was
+  never threaded into the defend-range lookup at all — a Fish (low PFR)
+  who raises got treated as a standard-width opener from their position,
+  and a raise made *over a limp* (isolation: dead money, an already-
+  committed player) was scored identically to a raise into an empty pot.
+  Both signal a tighter range than a plain tabulated open. Added
+  `ARCHETYPE_AGGRESSOR_FACTOR` and `ISO_OVER_LIMP_FACTOR` to
+  `ranges/table.py` (documented cursors, same status as `UNCERTAINTY_BAND`
+  in `gates.py`), a new `actionline.is_a_raise_over_a_limp()` to detect the
+  isolation case (`pot_type()` alone can't — one raise reads as `"srp"`
+  either way), and threaded `villain_archetype` through `vs_rfi`/`squeeze`/
+  `vs_3bet`/`vs_4bet` end to end (`brief.py`'s defend-scenario selection,
+  and `pc ranges` standalone).
+- **`pc_bootstrap.py` had no escape hatch once `scripts/` was copied
+  outside its plugin layout** (e.g. to work around read-only skill
+  mounts) — none of its ancestor/sibling-search strategies can find
+  anything from an unrelated location, and the obvious workaround
+  (`PYTHONPATH=.../poker-coach:engine`) is broken by the `:` in the
+  directory name being `PATH`'s own separator (it silently becomes *two*
+  path entries, neither valid). Added a `POKERCOACH_ENGINE_DIR` environment
+  variable, checked first and given a clear error if it doesn't actually
+  contain `pokercoach/`; the fallback error message now also calls out the
+  `:`-in-`PYTHONPATH` trap and the symlink workaround.
+- **Glossary alias gaps.** `pc glossary isolation` failed even though
+  `iso-raise` already covered it, and `fold_equity`/`multiway`/
+  `equity_realization`/`realisation_equite` were missing outright despite
+  being used constantly in session. Added `multiway`, `stab`, `calling
+  station`, `fold equity`, and `réalisation d'équité` as new terms, plus an
+  `ALIASES` table (`isolation` → `iso-raise`, `equity_realization`/
+  `realisation_equite` → `réalisation d'équité`) and snake_case
+  normalization (`fold_equity` → `fold equity`) that doesn't touch the
+  engine's own underscored identifiers (`n_behind`, `ip_postflop`).
+- **Nothing stopped the coach from hallucinating state — the most
+  important finding.** The reporting session hand-wrote table renders
+  instead of calling `pc render`, and narrated a full turn and river while
+  `hand.json` stayed stuck on the flop; the `pc brief` calls that followed
+  silently ran on the wrong street. Not an engine bug — a workflow gap the
+  engine could still guard against. Three changes: `DerivedState.to_json()`
+  (so `pc state`/`pc brief`) and `cmd_render`'s JSON both now carry a
+  `board` field (the derived header had `street` but not what's actually on
+  it); added `pc assert-state --hand hand.json [--street S] [--board ...]
+  [--to-act N]`, a tripwire that fails loudly (non-zero exit) the moment
+  the real state disagrees with what's expected, meant to be called before
+  announcing a new street or resuming a session; and `live-session/SKILL.md`
+  now states the rule explicitly — no hand-written table renders, ever, and
+  `advance_street.py` runs before any narration of the street it opens, not
+  after.
+
 ## Repo layout
 
 ```

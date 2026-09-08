@@ -94,6 +94,16 @@ def render(*, seats: dict[str, dict], hero_position: str, hero: dict, board: lis
     def s(pos: str | None, key: str, default: Any = "") -> Any:
         if pos is None:
             return default
+        if key == "action":
+            # Régression : un siège couché sur une rue PRÉCÉDENTE n'a aucune
+            # action sur la rue COURANTE (``node["actions"]`` ne couvre que la
+            # rue affichée) -- sans ce repli sur ``status``, la case
+            # redevenait vide au changement de rue, indistincte d'un siège
+            # actif qui n'a simplement pas encore parlé.
+            action = seats[pos].get("action", "")
+            if not action and seats[pos].get("status") == "folded":
+                return "fold"
+            return action
         return seats[pos].get(key, default)
 
     def label(pos: str | None) -> str:
@@ -156,7 +166,8 @@ def render(*, seats: dict[str, dict], hero_position: str, hero: dict, board: lis
     board_cells = (board + ["--"] * 5)[:5]
     lines.append(" " * SIDE_W + "│" + _c(" ".join(board_cells), INNER) + "│")
     lines.append(" " * SIDE_W + "│" + _c(f"pot · {bb(pot)}", INNER) + "│")
-    hero_action, hero_amount = hero.get("action", "?"), hero.get("amount")
+    hero_action = hero.get("action") or ("fold" if hero.get("status") == "folded" else "?")
+    hero_amount = hero.get("amount")
     hero_content = f"{hero_action} · {bb(hero_amount)}" if hero_action and hero_amount else hero_action
     lines.append(" " * SIDE_W + "│" + _c(hero_content, INNER) + "│")
     lines.append(" " * SIDE_W + "╰" + "─" * INNER + "╯")

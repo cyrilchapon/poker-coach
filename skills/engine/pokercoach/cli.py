@@ -21,6 +21,10 @@ Sous-commandes :
     pc showdown --board B --hand NAME:C1C2 [--hand NAME:C1C2 ...]
     pc glossary <terme>
     pc apply    --hand hand.json --action "b 5.5"  applique une action, réécrit l'état
+    pc assert-state --hand hand.json [--street S] [--board ...] [--to-act N]
+                vérifie que l'état réel correspond à ce que le coach CROIT être vrai --
+                échoue bruyamment (code non nul) en cas de dérive, plutôt que de laisser
+                le coach narrer une rue qui n'est pas celle réellement en mémoire
     pc paths    chemins absolus resolus de pokercoach/, data/, docs/ (utile hors dev :
                 claude.ai déploie chaque skill isolée, sans racine de repo commune)
 """
@@ -36,7 +40,10 @@ from . import actionline, brief as brief_mod, budget as budget_mod, glossary, ha
 from . import render as render_mod, showdown as showdown_mod, sizing as sizing_mod, texture as texture_mod
 from .cards import Card, CardError, parse_card, parse_cards
 from .equity import equity as compute_equity
-from .state import StateError, derive, n_behind as derive_n_behind_state, position_labels, validate_and_load
+from .state import (
+    STREETS, StateError, derive, n_behind as derive_n_behind_state, position_labels, remaining_stack,
+    validate_and_load,
+)
 
 
 def _load_hand_json(path: str) -> dict[str, Any]:
@@ -193,15 +200,18 @@ def cmd_ranges(args: argparse.Namespace) -> dict[str, Any]:
     if scenario == "rfi":
         entry = range_table.rfi(key)
     elif scenario == "vs_rfi":
-        entry = range_table.vs_rfi(key, opener_n_behind=derive_n_behind_state(state, opener_seat))
+        entry = range_table.vs_rfi(key, opener_n_behind=derive_n_behind_state(state, opener_seat),
+                                    villain_archetype=args.villain_archetype,
+                                    iso_over_limp=actionline.is_a_raise_over_a_limp(state))
     elif scenario == "vs_limp":
         entry = range_table.vs_limp(key)
     elif scenario == "squeeze":
-        entry = range_table.squeeze(key, opener_n_behind=derive_n_behind_state(state, opener_seat))
+        entry = range_table.squeeze(key, opener_n_behind=derive_n_behind_state(state, opener_seat),
+                                     villain_archetype=args.villain_archetype)
     elif scenario == "vs_3bet":
-        entry = range_table.vs_3bet(key)
+        entry = range_table.vs_3bet(key, villain_archetype=args.villain_archetype)
     elif scenario == "vs_4bet":
-        entry = range_table.vs_4bet(key)
+        entry = range_table.vs_4bet(key, villain_archetype=args.villain_archetype)
     else:
         raise StateError(f"scénario inconnu : {scenario!r}")
     return entry.to_json()
@@ -232,7 +242,14 @@ def cmd_render(args: argparse.Namespace) -> dict[str, Any]:
         for act in node["actions"]:
             if act["seat"] == seat.seat:
                 action, amount = act["action"], act.get("amount")
-        d: dict[str, Any] = {"stack": round(seat.stack, 2), "action": action, "amount": amount}
+        # Régression : ``seat.stack`` est le stack de DÉBUT DE MAIN, jamais
+        # débité par `pc apply`/`advance_street.py` en cours de main (seul
+        # `new_hand.py` réconcilie, en fin de main) -- l'afficher tel quel
+        # rendait un stack périmé pendant toute la main, en désaccord avec
+        # `effective_stack` de `pc state`/`pc brief` (qui, lui, dérive déjà
+        # correctement via `remaining_stack`). Même source ici.
+        d: dict[str, Any] = {"stack": round(remaining_stack(state, seat.seat), 2),
+                              "action": action, "amount": amount, "status": seat.status}
         if seat.archetype:
             d["archetype"] = seat.archetype
         if seat.cards:
@@ -241,11 +258,20 @@ def cmd_render(args: argparse.Namespace) -> dict[str, Any]:
 
     seats_out = {labels[s.seat]: seat_dict(s) for s in state.seats if s.seat != state.hero_seat}
     hero = state.seats[state.hero_seat]
+    d = derive(state)
     ascii_art = render_mod.render(
         seats=seats_out, hero_position=labels[state.hero_seat], hero=seat_dict(hero),
-        board=[str(c) for c in state.board], pot=round(derive(state).pot, 2), street=state.street,
+        board=[str(c) for c in state.board], pot=round(d.pot, 2), street=state.street,
     )
-    return {"ascii": ascii_art}
+    # En-tête d'état structuré, en plus de l'ASCII (revue live-session) :
+    # un rendu écrit à la main plutôt que produit par cette commande, ou un
+    # `pc brief` appelé sur la mauvaise rue après une transition oubliée,
+    # ne laissait rien à vérifier mécaniquement -- seul le dessin ASCII (du
+    # texte à comparer à l'œil) portait street/board/to_act/pot. Repris de
+    # `derive().to_json()`, la même source que `pc state`/`pc brief`, pour
+    # qu'un désaccord entre ce que le coach affiche et ce que le moteur
+    # pense être vrai soit visible sans avoir à parser le dessin.
+    return {"ascii": ascii_art, "state": d.to_json()}
 
 
 def cmd_showdown(args: argparse.Namespace) -> dict[str, Any]:
@@ -260,6 +286,8 @@ def cmd_showdown(args: argparse.Namespace) -> dict[str, Any]:
 def cmd_sizing(args: argparse.Namespace) -> dict[str, Any]:
     if args.sizing_cmd == "bet-pct":
         return {"bet_pct": sizing_mod.bet_pct(args.bet, args.pot_before)}
+    if args.sizing_cmd == "preflop-open-to":
+        return sizing_mod.preflop_open_to(args.limpers, villain_archetype=args.villain_archetype)
     return sizing_mod.raise_to(args.pot_before_bet, args.bet_to_call, args.fraction)
 
 
@@ -417,6 +445,53 @@ def cmd_apply(args: argparse.Namespace) -> dict[str, Any]:
     return result
 
 
+# --- assert-state ----------------------------------------------------------
+
+def cmd_assert_state(args: argparse.Namespace) -> dict[str, Any]:
+    """Tripwire mécanique contre la dérive coach/état (revue live-session) :
+    le coach affiche parfois une table écrite à la main au lieu d'appeler
+    `pc render`, ou narre une rue sans avoir réellement appelé
+    `advance_street.py` -- `hand.json` reste alors bloqué sur la rue
+    précédente pendant que le texte affiché au joueur en décrit une autre,
+    et les `pc brief`/`pc budget` suivants tournent silencieusement sur le
+    mauvais état. Rien dans l'ancien contrat CLI ne pouvait détecter ça
+    avant que ses conséquences (une décision prise sur un état fictif) ne
+    soient déjà actées. À appeler juste avant d'annoncer une nouvelle rue
+    ou de reprendre une main après une pause : échoue bruyamment (code non
+    nul, `StateError`) au moindre désaccord plutôt que de laisser la
+    session continuer sur une hypothèse fausse."""
+    state = _load_state(args.hand)
+    errors: list[str] = []
+
+    if args.street is not None and state.street != args.street:
+        errors.append(f"street attendue {args.street!r}, état réel {state.street!r}")
+
+    if args.board is not None:
+        try:
+            expected_board = parse_cards([c for c in args.board.split(",") if c])
+        except CardError as exc:
+            raise StateError(f"--board invalide : {exc}") from exc
+        if expected_board != state.board:
+            errors.append(
+                f"board attendu {[str(c) for c in expected_board]}, "
+                f"état réel {[str(c) for c in state.board]}"
+            )
+
+    if args.to_act is not None and state.to_act != args.to_act:
+        errors.append(f"to_act attendu {args.to_act}, état réel {state.to_act}")
+
+    if errors:
+        raise StateError("assert-state a échoué (l'état réel diverge de ce qui était attendu) : "
+                          + " ; ".join(errors))
+
+    return {
+        "ok": True,
+        "street": state.street,
+        "board": [str(c) for c in state.board],
+        "to_act": state.to_act,
+    }
+
+
 # --- dispatch ------------------------------------------------------------
 
 def build_parser() -> argparse.ArgumentParser:
@@ -472,6 +547,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--opener-seat", type=int, default=None,
                     help="siège de l'ouvreur/agresseur adverse -- requis pour vs_rfi/squeeze si "
                          "aucun agresseur n'est détectable dans l'historique de la main")
+    p.add_argument("--villain-archetype", default=None, choices=["nit", "tag", "lag", "fish", "maniac", "calling_station"])
     p.set_defaults(func=cmd_ranges)
 
     p = sub.add_parser("brief", help="⭐ tout ce qui précède, en un appel")
@@ -502,6 +578,10 @@ def build_parser() -> argparse.ArgumentParser:
     p2.add_argument("--pot-before-bet", type=float, required=True)
     p2.add_argument("--bet-to-call", type=float, required=True)
     p2.add_argument("--fraction", type=float, required=True)
+    p3 = sizing_sub.add_parser("preflop-open-to", help="taille d'ouverture/isolation preflop, en bb")
+    p3.add_argument("--limpers", type=int, default=0, help="nombre de limpeurs déjà dans le pot (0 = RFI)")
+    p3.add_argument("--villain-archetype", default=None,
+                     choices=["nit", "tag", "lag", "fish", "maniac", "calling_station"])
     p.set_defaults(func=cmd_sizing)
 
     p = sub.add_parser("glossary", help="une définition de terme GTO")
@@ -512,6 +592,13 @@ def build_parser() -> argparse.ArgumentParser:
     hand_arg(p)
     p.add_argument("--action", required=True, help='ex "b 5.5", "c", "x", "f", "r 12"')
     p.set_defaults(func=cmd_apply)
+
+    p = sub.add_parser("assert-state", help="vérifie street/board/to_act réels vs attendus -- échoue si divergence")
+    hand_arg(p)
+    p.add_argument("--street", default=None, choices=list(STREETS))
+    p.add_argument("--board", default=None, help="cartes attendues séparées par des virgules")
+    p.add_argument("--to-act", type=int, default=None)
+    p.set_defaults(func=cmd_assert_state)
 
     p = sub.add_parser("paths", help="chemins absolus de pokercoach/, data/, docs/ pour ce déploiement")
     p.set_defaults(func=cmd_paths)

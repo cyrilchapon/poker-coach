@@ -70,6 +70,15 @@ Génère automatiquement le rendu ASCII conforme aux règles v1 préservées dan
 
 Ne pas régénérer après chaque action isolée — accumuler les actions de la rue, afficher juste avant la décision du Héros.
 
+## Garde-fous contre la dérive d'état — ne jamais halluciner la table
+
+Constat de session (revue live-session) : deux décisions du Héros ont été prises sur un état de jeu fictif parce qu'un turn puis une river ont été **narrés en prose** (un rendu de table écrit à la main, pas produit par `pc render`) sans jamais appeler `advance_street.py` — `hand.json` était resté bloqué au flop pendant toute la séquence, et les `pc brief` qui suivaient tranchaient donc sur la mauvaise rue sans que rien ne le signale. C'est une erreur qu'il est structurellement facile de commettre (rien n'empêchait de "juste continuer à écrire"), donc traitée ici comme une règle dure, pas une bonne pratique :
+
+- **Ne jamais afficher un rendu de table qui ne provienne pas d'un appel réel à `scripts/pc render`.** Aucun tableau, grille ou récapitulatif de table écrit à la main, même pour "gagner du temps" sur une transition triviale.
+- **Toute transition de rue passe par `scripts/advance_street.py` avant tout rendu ou toute narration de cette rue** — jamais l'inverse. Distribuer une carte en prose sans l'avoir d'abord actée dans `hand.json` est exactement le bug constaté.
+- `pc render` et `pc state`/`pc brief` renvoient désormais un en-tête d'état structuré (`state.street`, `state.board`, en plus du dessin ASCII) dérivé de la même source — un désaccord entre ce qui est affiché au joueur et ce que ces champs disent est le signal que quelque chose a dérivé.
+- **En cas de doute** (reprise de session après une pause, main longue, ou simple prudence) : `scripts/pc assert-state --hand hand.json --street <rue attendue> [--board <cartes attendues>]` avant d'annoncer une nouvelle rue ou de reprendre la main — échoue bruyamment (code non nul) si l'état réel diverge, plutôt que de laisser la session continuer sur une hypothèse fausse.
+
 ## Timing des adversaires (tell principal en ligne — en prose, pas dans le rendu)
 
 Décrire le temps de décision dans le récit qui accompagne le rendu, **seulement quand il sort de l'ordinaire** :

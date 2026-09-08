@@ -80,6 +80,22 @@ def test_multiway_kills_bluff_att_at_three_plus_opponents():
     assert any("bluff_dies_multiway" in r["reason"] for r in b_multi.removed)
 
 
+def test_def_exhausted_fold_on_a_multiway_draw_flags_implied_odds_gap():
+    # Review finding: att-def-budgets.yaml has no implied-odds term at all,
+    # so a DEF-exhausted fold on a draw is exactly the spot where it is most
+    # likely to be too conservative (multiway, opponents who pay wide). The
+    # verdict/threshold stays a user-owned cursor (not silently changed
+    # here), but compute() must at least surface the gap instead of handing
+    # back a plain "budget insuffisant" fold with no caveat.
+    hc, tex = hc_and_texture(["9♠", "6♥"], ["T♦", "8♣", "3♥"])  # a draw, no made value
+    assert hc.draw is not None
+    b = compute(hc, tex, pot_type="srp", street="flop", n_opponents_active=2,
+                pressure_spent=0.0, pressure_faced=100.0, facing_bet=True)
+    assert b.def_remaining == 0.0
+    assert "call" not in b.viable_actions
+    assert any("implied odds" in note for note in b.notes)
+
+
 def test_exploit_gate_blocks_bluff_vs_calling_station_on_turn():
     hc, tex = hc_and_texture(["6♠", "4♥"], ["9♦", "8♣", "2♥"])  # trash, no draw
     b = compute(hc, tex, pot_type="srp", street="turn", n_opponents_active=1,

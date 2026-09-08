@@ -16,6 +16,15 @@ défendable compte tenu de ce que chaque étage modélise) :
 4. Règles dures multiway (bluff meurt à 3+ adversaires).
 5. Gates exploitantes G4 (archétype adverse), si un archétype est connu.
 6. Décrément par la pression déjà engagée dans la main.
+
+Limite connue (revue) : aucun étage ci-dessus ne modélise les implied/reverse
+implied odds -- le budget DEF d'un tirage reflète la pression déjà subie,
+pas ce qu'un tirage touché pourrait extraire ensuite (ou risque de perdre)
+sur les tapis restants. C'est le point où un fold "DEF insuffisant" est le
+plus susceptible d'être trop prudent en multiway contre des calling
+stations ; ``compute()`` l'expose alors comme note plutôt que de prétendre
+le corriger ici -- ce facteur reste qualitatif (skill decision-factors,
+gate G5), pas chiffré dans ces tables.
 """
 from __future__ import annotations
 
@@ -373,6 +382,7 @@ def compute(hc: HandClass, texture: Texture, *, pot_type: str, street: str,
 
     viable = []
     removed = list(mw_removed) + list(exploit_removed)
+    budget_notes: list[str] = []
     if att_remaining > 0:
         viable.append(aggressive_label)
     else:
@@ -383,6 +393,23 @@ def compute(hc: HandClass, texture: Texture, *, pot_type: str, street: str,
             viable.append("call")
         else:
             removed.append({"action": "call", "reason": f"budget DEF insuffisant ({round(def_remaining, 2)} <= 0)"})
+            # Limite connue (revue) : att-def-budgets.yaml ne modélise AUCUNE
+            # implied odds -- le "def" d'un tirage n'est qu'une pression déjà
+            # subie, pas ce qu'un tirage touché pourrait encore extraire des
+            # tapis adverses. C'est exactement le cas où ce repli DEF-épuisé
+            # est le plus susceptible de sous-évaluer un call : un tirage,
+            # multiway, contre des adversaires qui paient large. Le signaler
+            # ici plutôt que de prétendre trancher -- l'ajustement chiffré
+            # appartient au skill decision-factors (gate G5), pas à ce module
+            # mécanique.
+            if hc.draw is not None and n_opponents_active >= 2:
+                budget_notes.append(
+                    "implied odds non modélisées : ce fold DEF-épuisé porte sur un tirage en "
+                    f"multiway ({n_opponents_active} adversaires actifs) -- si un ou plusieurs "
+                    "adversaires paient large (calling station), la vraie valeur du call peut "
+                    "être supérieure au DEF chiffré ici ; cf. glossaire 'implied odds' / skill "
+                    "decision-factors."
+                )
         viable.append("fold")
     else:
         viable.append("check")  # toujours gratuit, jamais gaté par DEF
@@ -391,5 +418,5 @@ def compute(hc: HandClass, texture: Texture, *, pot_type: str, street: str,
         att_base=att_base, def_base=def_base,
         att_after_penalties=att_after_pen, def_after_penalties=def_after_pen,
         att_remaining=att_remaining, def_remaining=def_remaining,
-        viable_actions=viable, removed=removed, notes=tex_notes + exploit_notes,
+        viable_actions=viable, removed=removed, notes=tex_notes + exploit_notes + budget_notes,
     )

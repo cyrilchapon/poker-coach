@@ -180,7 +180,8 @@ def _nearest_rfi_row_for_opener(opener_n_behind: int) -> dict:
     return non_ip[0] if non_ip else rows[0]
 
 
-def vs_rfi(key: RangeKey, *, opener_n_behind: int) -> RangeEntry:
+def vs_rfi(key: RangeKey, *, opener_n_behind: int, villain_archetype: str | None = None,
+           iso_over_limp: bool = False) -> RangeEntry:
     """Défense face à une ouverture. Formule d'approximation (pas une table) :
     la largeur de défense est mise à l'échelle de la force implicite de
     l'ouverture adverse (une ouverture UTG => plus forte => on défend plus
@@ -189,19 +190,33 @@ def vs_rfi(key: RangeKey, *, opener_n_behind: int) -> RangeEntry:
     ``range`` est maintenant une vraie notation parseable (top_pct_range),
     pas seulement la prose "~X% (largeur approximée)" — nécessaire pour que
     ``pc brief`` puisse tester "la main du héros est-elle dedans ?" (avant,
-    ce champ ne pouvait être qu'affiché, jamais vérifié — code mort)."""
+    ce champ ne pouvait être qu'affiché, jamais vérifié — code mort).
+
+    ``villain_archetype`` (régression : accepté par ``pc brief`` mais jamais
+    transmis jusqu'ici) et ``iso_over_limp`` (relance par-dessus un limp, pas
+    dans un pot vierge -- cf. ``brief._is_a_raise_over_a_limp``) resserrent
+    ou élargissent le pct d'ouverture supposé de l'agresseur AVANT de le
+    comparer à ``reference_widest_pct`` -- voir ``ARCHETYPE_AGGRESSOR_FACTOR``
+    / ``ISO_OVER_LIMP_FACTOR`` ci-dessus pour le raisonnement et le statut de
+    curseur de ces facteurs."""
     # La BB (n_behind=0) n'ouvre jamais, donc n'a pas de ligne RFI propre —
     # on prend la SB (n_behind=1, non-IP) comme plafond de référence pour
     # tout défenseur sans ligne RFI directe (approximation documentée).
     ceiling = _rfi_row(key.n_behind, key.ip_postflop) or _rfi_row(1, False)
     opener = _nearest_rfi_row_for_opener(opener_n_behind)
+    opener_pct = opener["pct"] * _archetype_factor(villain_archetype)
+    if iso_over_limp:
+        opener_pct *= ISO_OVER_LIMP_FACTOR
     reference_widest_pct = 45.0  # BTN 6-max, l'open le plus large de la table
-    factor = min(1.0, opener["pct"] / reference_widest_pct)
+    factor = min(1.0, opener_pct / reference_widest_pct)
     pct = round(ceiling["pct"] * factor, 1)
-    return RangeEntry(
-        scenario="vs_rfi", range=top_pct_range(pct), pct=pct, confidence="extrapolated",
-        note=f"vs ouverture {opener.get('usual_label', '?')} (pct {opener['pct']}%)",
-    )
+    note = f"vs ouverture {opener.get('usual_label', '?')} (pct {opener['pct']}%)"
+    if villain_archetype:
+        note += f" ; resserré/élargi pour l'archétype {villain_archetype!r}"
+    if iso_over_limp:
+        note += " ; relance par-dessus un limp (isolation) -- resserré davantage"
+    return RangeEntry(scenario="vs_rfi", range=top_pct_range(pct), pct=pct,
+                       confidence="extrapolated", note=note)
 
 
 def vs_limp(key: RangeKey) -> RangeEntry:
@@ -224,8 +239,8 @@ def vs_limp(key: RangeKey) -> RangeEntry:
                        note="isolation élargie face à un limp — traiter en scénario exploitant, pas dégénéré")
 
 
-def squeeze(key: RangeKey, *, opener_n_behind: int) -> RangeEntry:
-    base = vs_rfi(key, opener_n_behind=opener_n_behind)
+def squeeze(key: RangeKey, *, opener_n_behind: int, villain_archetype: str | None = None) -> RangeEntry:
+    base = vs_rfi(key, opener_n_behind=opener_n_behind, villain_archetype=villain_archetype)
     if base.pct == 0:
         return base
     pct = round(base.pct * 0.6, 1)
@@ -240,14 +255,49 @@ _VS_3BET_BASE = {True: 45.0, False: 30.0}    # ip_postflop -> pct de continuatio
 _VS_4BET_BASE = {True: 15.0, False: 10.0}
 _STACK_ADJUST = {"short": 1.15, "standard": 1.0, "deep": 0.9}
 
+# Combien un archétype adverse élargit ou resserre la range qu'on lui prête
+# quand IL est l'agresseur (relance/3bet/4bet), multiplicatif sur son pct
+# d'ouverture supposé. Curseur qualité/coût (même statut que UNCERTAINTY_BAND
+# dans gates.py) -- valeurs de départ, à ajuster après usage réel, pas une
+# vérité figée. "fish"/"calling_station" sont volontairement RESSERRÉS malgré
+# leur image large : un joueur loose-passif qui choisit quand même de
+# relancer le fait rarement en bluff -- l'action elle-même est le signal, pas
+# son image de table générale (qui, elle, gouverne plutôt sa largeur de CALL,
+# cf. att-def-budgets.yaml/G4). "nit"/"tag" resserrent aussi (peu/prudemment
+# agressifs) ; "lag"/"maniac" élargissent (agressent avec beaucoup plus de
+# mains). Valeur par défaut (``None`` ou archétype non listé) : 1.0, aucun
+# ajustement -- comportement inchangé sans ``--villain-archetype``.
+ARCHETYPE_AGGRESSOR_FACTOR: dict[str | None, float] = {
+    "nit": 0.6, "tag": 0.9, "lag": 1.3, "fish": 0.5, "maniac": 1.6, "calling_station": 0.5,
+}
 
-def vs_3bet(key: RangeKey) -> RangeEntry:
-    pct = round(_VS_3BET_BASE[key.ip_postflop] * _STACK_ADJUST[key.stack_bucket], 1)
+# Relancer PAR-DESSUS un limp (isolation) signale plus de force que relancer
+# dans un pot vierge (RFI) : de l'argent mort est déjà dans le pot et un
+# joueur est déjà engagé -- un joueur qui isole le fait typiquement avec une
+# range plus étroite que son ouverture standard. Même statut de curseur que
+# ci-dessus.
+ISO_OVER_LIMP_FACTOR = 0.75
+
+
+def _archetype_factor(villain_archetype: str | None) -> float:
+    return ARCHETYPE_AGGRESSOR_FACTOR.get(villain_archetype, 1.0)
+
+
+def vs_3bet(key: RangeKey, *, villain_archetype: str | None = None) -> RangeEntry:
+    pct = _VS_3BET_BASE[key.ip_postflop] * _STACK_ADJUST[key.stack_bucket]
+    pct = round(pct * _archetype_factor(villain_archetype), 1)
+    note = "peu sensible au format : pot déjà réduit à 2 joueurs"
+    if villain_archetype:
+        note += f" ; ajusté pour l'archétype {villain_archetype!r}"
     return RangeEntry(scenario="vs_3bet", range=top_pct_range(pct), pct=pct,
-                       confidence="extrapolated", note="peu sensible au format : pot déjà réduit à 2 joueurs")
+                       confidence="extrapolated", note=note)
 
 
-def vs_4bet(key: RangeKey) -> RangeEntry:
-    pct = round(_VS_4BET_BASE[key.ip_postflop] * _STACK_ADJUST[key.stack_bucket], 1)
+def vs_4bet(key: RangeKey, *, villain_archetype: str | None = None) -> RangeEntry:
+    pct = _VS_4BET_BASE[key.ip_postflop] * _STACK_ADJUST[key.stack_bucket]
+    pct = round(pct * _archetype_factor(villain_archetype), 1)
+    note = "peu sensible au format : pot déjà réduit à 2 joueurs"
+    if villain_archetype:
+        note += f" ; ajusté pour l'archétype {villain_archetype!r}"
     return RangeEntry(scenario="vs_4bet", range=top_pct_range(pct), pct=pct,
-                       confidence="extrapolated", note="peu sensible au format : pot déjà réduit à 2 joueurs")
+                       confidence="extrapolated", note=note)

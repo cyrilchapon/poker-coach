@@ -112,6 +112,23 @@ def last_aggressor(state: HandState) -> int | None:
     return last
 
 
+def is_a_raise_over_a_limp(state: HandState) -> bool:
+    """True si l'UNIQUE relance préflop (``pot_type() == "srp"``) a été
+    posée PAR-DESSUS un ou plusieurs limps déjà présents (isolation), pas
+    dans un pot vierge (RFI classique). ``pot_type()`` ne fait pas cette
+    distinction (une seule relance -> "srp" dans les deux cas), mais la
+    range de l'ouvreur n'a pas le même sens dans les deux cas : relancer
+    par-dessus de l'argent mort et un joueur déjà engagé est un signal de
+    force plus fort qu'ouvrir un pot vide. Public : consommé par
+    ``brief.py`` (résolution de la range de défense, ``vs_rfi``) et
+    ``cli.cmd_ranges`` (lookup direct, même ajustement)."""
+    actions = state.streets["preflop"]["actions"]
+    raise_indices = [i for i, a in enumerate(actions) if a["action"] in ("raise", "allin")]
+    if len(raise_indices) != 1:
+        return False
+    return any(a["action"] == "call" for a in actions[:raise_indices[0]])
+
+
 @dataclass
 class PressureReplay:
     spent: dict[int, float]     # pression que CE siège a lui-même mise
