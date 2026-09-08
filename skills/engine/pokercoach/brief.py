@@ -134,6 +134,25 @@ def compute(raw: dict[str, Any], *, villain_archetype: str | None = None,
                         # sans qu'aucune équité n'ait été calculée).
                         raise_only = True
                         verdict_if_in_range = "raise"
+                    elif entry.scenario == "bb_defense_multiway":
+                        # bb_defense_multiway() EST une range de défense
+                        # complète (contrairement à squeeze()), mais reste une
+                        # FORMULE extrapolée (top-pct par force brute, cf.
+                        # ranges/table.py) -- pas plus fiable que squeeze()
+                        # pour trancher un fold "strong" sur une simple
+                        # frontière de %. Même garde-fou que ci-dessus, sur le
+                        # MÊME repro (BB J8o à 7.7:1) : sans lui, reclasser ce
+                        # spot en bb_defense_multiway (cf. bug live-session
+                        # #2) aurait réintroduit exactement le bug que le
+                        # detour par squeeze() masquait par accident -- fold
+                        # direct sans équité calculée dès que le héros sort
+                        # de la range à 10%, alors que ses cotes du pot
+                        # (11.5% ici) peuvent rendre le call rentable même
+                        # avec une main hors de cette fenêtre approximée.
+                        # ``verdict_if_in_range`` reste "raise_or_call" (pas
+                        # forcé "raise" comme squeeze) : dans cette range,
+                        # être dedans veut dire call, pas relance.
+                        raise_only = True
                     if hero_cards and entry.range:
                         in_range = _hand_in(hero_cards, entry.range)
             out["range"] = range_json
