@@ -273,3 +273,49 @@ def test_flush_draw_requires_hero_to_hold_a_suited_card():
     r = H(["A♠", "K♦"], ["2♥", "7♥", "9♥", "J♥"])
     assert r.draw_sub.get("flush_draw") is not True
     assert r.draw != "weak_draw"
+
+
+# --- outs_winning (live-session #3) -----------------------------------------
+
+def test_outs_winning_splits_off_the_board_pairing_outs_of_an_underpair():
+    # Live-session bug #3: 2♦2♠ on 6♠9♥4♥ reports outs=11 -- 2 (the last two
+    # deuces, trips) + 9 (any card pairing the board, "two pair"). That count
+    # is right for what `outs` documents ("improves the hand CLASS"), but it
+    # sits next to pot_odds, where 11 outs against 21% required equity reads
+    # as a call -- when two pair with a deuce kicker is worth nothing and a
+    # paired board helps the opponents far more. outs_winning keeps only the
+    # cards that improve something specific to hero's own two cards.
+    r = H(["2♦", "2♠"], ["6♠", "9♥", "4♥"])
+    assert r.made == "underpair"
+    assert r.outs == 11          # unchanged, still the documented class-improvement count
+    assert r.outs_winning == 2   # only the two remaining deuces
+
+
+def test_outs_winning_keeps_every_out_of_a_real_draw():
+    # A flush draw's outs are hero-specific by construction, so the stricter
+    # count must not shave anything off -- including 9♠, whose rank happens to
+    # match the board's 9♦ (the trap the round-2 fix already documented).
+    r = H(["A♠", "K♠"], ["2♠", "5♠", "9♦"])
+    assert r.outs == 15
+    assert r.outs_winning == 15
+
+
+def test_outs_winning_matches_outs_when_outs_already_excluded_board_pairs():
+    # On an already-made pair that is NOT a pocket pair, `outs` itself already
+    # drops pure board pairings, so the two counts coincide -- outs_winning
+    # only adds the pocket-pair case that exemption left out.
+    r = H(["K♦", "Q♠"], ["K♥", "7♣", "2♦"])
+    assert r.made == "top_pair"
+    assert r.outs == 5
+    assert r.outs_winning == 5
+
+
+def test_outs_winning_is_none_on_the_river_like_outs():
+    r = H(["A♠", "K♥"], ["9♦", "6♣", "2♥", "3♦", "7♠"])
+    assert r.outs is None
+    assert r.outs_winning is None
+
+
+def test_outs_winning_is_exposed_in_json():
+    r = H(["2♦", "2♠"], ["6♠", "9♥", "4♥"]).to_json()
+    assert r["outs"] == 11 and r["outs_winning"] == 2

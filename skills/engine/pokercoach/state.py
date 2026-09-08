@@ -327,33 +327,91 @@ def n_behind(state: HandState, seat: int) -> int:
     return len(order) - 1 - order.index(offset)
 
 
-def acting_order_seats(state: HandState) -> list[int]:
-    """Ordre de parole (sièges physiques) pour la rue COURANTE de ``state`` :
-    ordre préflop si ``state.street == "preflop"``, ordre postflop sinon."""
-    n = state.n_seats
-    offsets = (preflop_acting_order_offsets(n) if state.street == "preflop"
-               else postflop_acting_order_offsets(n))
-    return [(state.button_seat + off) % n for off in offsets]
+def seats_still_to_act(state: HandState, *, seat: int | None = None) -> list[int]:
+    """Sièges encore ACTIFS qui doivent encore parler sur la rue courante,
+    ``seat`` (``to_act`` par défaut) exclu.
 
+    Un siège doit encore parler tant qu'il n'a pas, DEPUIS la dernière mise
+    ou relance de la rue, à la fois agi volontairement ET égalé la mise la
+    plus haute. C'est une lecture de l'HISTORIQUE de la rue, jamais une
+    position dans l'ordre de parole : dès que l'action a été rouverte
+    (check -> bet -> call -> retour au checkeur, ou une relance qui rend la
+    parole à des sièges déjà passés), les sièges placés "après" le héros
+    dans l'ordre structurel ont justement DÉJÀ parlé — c'est précisément
+    pour ça que l'action lui revient.
 
-def players_to_act_behind(state: HandState, *, seat: int | None = None) -> int:
-    """Nombre de sièges encore ACTIFS (status == "active") devant parler
-    APRÈS ``seat`` (``to_act`` par défaut) sur la rue courante, dans l'ordre
-    de parole de cette rue -- réel décompte "reste-t-il quelqu'un derrière
-    moi", pas une mesure structurelle comme ``n_behind`` (qui, elle, ignore
-    les folds déjà survenus et sert de clé d'indexation de range). 0 signifie
-    que ``seat`` clôt l'action sur cette rue si personne ne relance derrière
-    lui -- cf. régression revue live-session #1 : rien dans `pc state`/`pc
-    brief` ne répondait à cette question, ce qui a fait affirmer à tort au
-    coach qu'un héros en BB (dernier à parler) ne fermait pas l'action.
+    Régression (revue de PR #9) : la première version prenait une tranche de
+    l'ordre structurel (UTG->BB préflop, SB->BTN postflop) filtrée aux
+    sièges actifs. Elle répondait donc 2 — et ``hero_closes_action`` False —
+    sur n'importe quelle ligne check->bet->call qui rend la parole au héros,
+    alors que payer y clôt la rue. Ces champs étant exposés tels quels dans
+    ``pc state``/``pc brief`` comme LA réponse mécanique à "reste-t-il
+    quelqu'un à parler derrière moi", c'était exactement l'erreur de
+    position (« le coach affirme à tort que le héros ne ferme pas
+    l'action ») que ce champ avait été ajouté pour supprimer.
 
     Un siège all-in ne peut plus agir : il n'est pas compté ici, alors qu'il
     l'est dans ``players_active``/``n_defenders`` (encore en lice pour le
-    pot, mais plus dans l'ordre de parole)."""
+    pot, mais plus dans l'ordre de parole).
+    """
     seat = state.to_act if seat is None else seat
-    order = [s for s in acting_order_seats(state) if state.seats[s].status == "active"]
-    idx = order.index(seat)
-    return len(order) - idx - 1
+    actions = state.streets[state.street]["actions"]
+
+    max_committed = max(
+        (street_contribution(state, state.street, s.seat) for s in state.seats
+         if s.status in ("active", "allin")),
+        default=0.0,
+    )
+
+    # Dernière action agressive de la rue : elle rouvre la parole à tous
+    # ceux qui l'avaient déjà prise avant elle. Une action n'est agressive
+    # que si elle AUGMENTE réellement le maximum engagé sur la rue -- un
+    # tapis pour MOINS que la mise en cours (3 sur une mise à 4) est un
+    # call partiel, pas une relance : il ne rouvre rien, et le compter
+    # comme tel remettait à tort les sièges déjà couchés sur la mise dans
+    # les "encore à parler". Les blindes (``post``) ne sont pas des mises
+    # volontaires -- la BB garde son option même sans relance -- donc elles
+    # n'ouvrent rien non plus ; c'est la comparaison des contributions qui
+    # porte le cas préflop. Sans agression sur la rue (-1), la condition
+    # ci-dessous se lit naturellement "a-t-il parlé volontairement, tout
+    # court ?".
+    #
+    # Simplification connue (même famille que les side pots ailleurs dans
+    # le moteur) : un tapis qui relance SANS atteindre une relance complète
+    # est traité ici comme une relance pleine. Les règles de salle ne
+    # rouvrent alors la parole qu'à une partie des joueurs ; ce cas
+    # demanderait de suivre l'incrément de la dernière relance complète.
+    last_aggression = -1
+    running_max = 0.0
+    for i, act in enumerate(actions):
+        amount = float(act.get("amount", 0.0))
+        if act["action"] in ("bet", "raise", "allin") and amount > running_max:
+            last_aggression = i
+        running_max = max(running_max, amount)
+
+    def has_spoken_since_last_aggression(other: int) -> bool:
+        return any(
+            i >= last_aggression and act["seat"] == other and act["action"] != "post"
+            for i, act in enumerate(actions)
+        )
+
+    return [
+        s.seat for s in state.seats
+        if s.seat != seat and s.status == "active"
+        and not (
+            has_spoken_since_last_aggression(s.seat)
+            and street_contribution(state, state.street, s.seat) >= max_committed
+        )
+    ]
+
+
+def players_to_act_behind(state: HandState, *, seat: int | None = None) -> int:
+    """Nombre de sièges encore actifs devant parler après ``seat``
+    (``to_act`` par défaut) sur la rue courante — ``len`` de
+    ``seats_still_to_act``, dont c'est la docstring de référence. 0 signifie
+    que ``seat`` clôt l'action sur cette rue si personne ne relance derrière
+    lui."""
+    return len(seats_still_to_act(state, seat=seat))
 
 
 def hero_closes_action(state: HandState) -> bool:
