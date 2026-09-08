@@ -1,7 +1,7 @@
 import pytest
 
 from pokercoach.cards import parse_cards
-from pokercoach.equity import equity, parse_range
+from pokercoach.equity import equity, equity_multiway, parse_range
 
 
 def test_parse_range_pair():
@@ -108,3 +108,20 @@ def test_equity_range_vs_range_sums_to_one():
 def test_equity_rejects_dead_range():
     with pytest.raises(ValueError):
         equity("AsKs", "AsKs")  # même deux cartes exactes des deux côtés -> conflit total
+
+
+def test_equity_multiway_matches_two_way_equity_with_a_single_villain():
+    hero_only = equity("AA", "KK").range1_equity
+    multiway = equity_multiway("AA", ["KK"])
+    assert multiway == pytest.approx(hero_only, abs=0.03)
+
+
+def test_equity_multiway_drops_as_more_villains_are_added():
+    heads_up = equity_multiway("QQ", ["22+,AKs,AKo"])
+    four_way = equity_multiway("QQ", ["22+,AKs,AKo"] * 3)
+    assert four_way < heads_up
+
+
+def test_equity_multiway_rejects_empty_villain_range():
+    with pytest.raises(ValueError):
+        equity_multiway("AsKs", ["AsKs"])  # même deux cartes exactes -> conflit total

@@ -54,3 +54,49 @@ def test_g2_budget_exhausted_fallback_to_call_is_also_strong():
     assert decision is not None
     assert decision.verdict == "call"
     assert decision.confidence == "strong"
+
+
+def test_g1_raise_only_out_of_range_defers_instead_of_folding():
+    # Bug fix: a "raise-only" range (squeeze()) doesn't cover the call
+    # option at all -- being out of it must never mean "fold" (that's a
+    # verdict on a decision G1 never evaluated), it must mean "no verdict
+    # yet, ask elsewhere" (cf. brief._compute_preflop_squeeze_equity_section
+    # / gate G1B).
+    decision = gates.g1_preflop_range(in_range=False, range_confidence="extrapolated", raise_only=True)
+    assert decision is None
+
+
+def test_g1_raise_only_in_range_still_decides():
+    decision = gates.g1_preflop_range(in_range=True, verdict_if_in_range="raise",
+                                       range_confidence="extrapolated", raise_only=True)
+    assert decision is not None
+    assert decision.verdict == "raise"
+    assert decision.confidence == "strong"
+
+
+def test_g1_non_raise_only_out_of_range_still_folds():
+    # Unchanged behaviour for the ordinary case (a full defend range, e.g.
+    # vs_rfi/vs_limp/vs_3bet/vs_4bet, covers call AND raise -- being out of
+    # it legitimately means fold).
+    decision = gates.g1_preflop_range(in_range=False, range_confidence="extrapolated")
+    assert decision is not None
+    assert decision.verdict == "fold"
+
+
+def test_g1b_squeeze_declined_favorable_odds_calls():
+    decision = gates.g1b_squeeze_declined_pot_odds(lower_bound=0.20, upper_bound=0.25, threshold=0.1154)
+    assert decision is not None
+    assert decision.gate == "G1B"
+    assert decision.verdict == "call"
+    assert decision.confidence == "strong"
+
+
+def test_g1b_squeeze_declined_unfavorable_odds_folds():
+    decision = gates.g1b_squeeze_declined_pot_odds(lower_bound=0.02, upper_bound=0.03, threshold=0.30)
+    assert decision is not None
+    assert decision.verdict == "fold"
+
+
+def test_g1b_squeeze_declined_straddling_band_escalates():
+    decision = gates.g1b_squeeze_declined_pot_odds(lower_bound=0.10, upper_bound=0.13, threshold=0.1154)
+    assert decision is None
