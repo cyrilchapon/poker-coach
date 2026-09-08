@@ -293,6 +293,48 @@ def test_cli_render_seat_status_and_folded_seat_stays_visible_on_next_street(cap
     assert "fold" in ascii_art
 
 
+def test_cli_render_places_seats_clockwise_from_hero_and_drops_busted_seats(capsys):
+    # Regression trouvée en review de PR (#8) : cmd_render ne passait jamais
+    # `acting_order` à render() -- celui-ci retombait sur l'ordre d'insertion
+    # de `seats_out`, construit en itérant les sièges PHYSIQUES 0..n-1 (Héros
+    # exclu), pas la rotation clockwise-depuis-la-gauche-du-Héros que
+    # render() exige. Les données de chaque siège restaient justes (chaque
+    # label gardait son propre stack/action), mais leur PLACEMENT autour de
+    # la table était faux dès que le Héros n'était pas le dernier siège
+    # physique -- un désaccord invisible avec les fixtures existantes, où le
+    # Héros est presque toujours en dernière position.
+    #
+    # Bouton = siège 0, Héros = siège 2 (BB, PAS le dernier siège physique).
+    # Un siège busté (status "out") est aussi présent : il ne doit plus
+    # apparaître à la table du tout, pas seulement être bien placé.
+    hand = str(FIXTURES / "six_max_hero_not_last_with_bust.json")
+    code, out, err = run(["render", "--hand", hand], capsys)
+    assert code == 0, err
+    ascii_art = json.loads(out)["ascii"]
+    assert ascii_art == "\n".join([
+        "             ── preflop ──              ",
+        "",
+        "          ╭──────────────────╮",
+        "          │                  │",
+        "          │                  │",
+        "  CO(mnc) │                  │ BTN(tag)",
+        "     100𝄫 │                  │ 100𝄫",
+        "          │                  │",
+        "          │  -- -- -- -- --  │",
+        "          │    pot · 1.5𝄫    │",
+        "          │                  │",
+        " UTG(nit) │                sb│ SB(lag)",
+        "     100𝄫 │              0.5𝄫│ 99.5𝄫",
+        "          │     bb · 1𝄫      │",
+        "          ╰──────────────────╯",
+        "                BB · 99𝄫                ",
+        "                 A♠ K♦                  ",
+    ])
+    # Le siège busté (HJ, archétype "fish") n'est plus à la table.
+    assert "HJ" not in ascii_art
+    assert "fsh" not in ascii_art
+
+
 def test_cli_sizing_preflop_open_to(capsys):
     code, out, err = run(["sizing", "preflop-open-to", "--limpers", "2",
                            "--villain-archetype", "fish"], capsys)

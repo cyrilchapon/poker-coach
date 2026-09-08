@@ -139,3 +139,37 @@ def test_bb_drops_superfluous_trailing_zero_everywhere():
     assert r.bb(21.5) == "21.5𝄫"
     assert r.bb(0.5) == "0.5𝄫"
     assert r.bb(None) == ""
+
+
+def test_render_archetype_abbreviations_cover_the_full_schema():
+    # Régression : `calling_station` (une des 7 valeurs de state.ARCHETYPES)
+    # n'avait pas d'entrée dans ARCHETYPE_ABBR -- retombait sur une
+    # troncature accidentelle ("cal"), exactement ce que la table explicite
+    # est censée éviter pour fish/maniac.
+    assert r._abbr("calling_station") == "cst"
+
+
+def test_render_allin_seat_with_no_current_street_action_shows_allin_not_blank():
+    # Régression, même famille que le repli "fold" déjà en place : un siège
+    # tapis sur une rue PRÉCÉDENTE n'a pas d'entrée dans les actions de la
+    # rue courante -- une case vide serait indiscernable d'un siège actif
+    # qui n'a simplement pas encore parlé, alors qu'un tapis ne peut plus
+    # agir du tout.
+    seats = {"BTN": {"stack": 0.0, "action": "", "amount": None, "status": "allin"}}
+    hero = {"stack": 50.0, "action": "", "amount": None}
+    out = r.render(seats=seats, hero_position="BB", hero=hero, board=[], pot=100.0,
+                    acting_order=["BTN"])
+    # Pas de case vide en lieu et place -- l'action du siège top est la
+    # première ligne intérieure du rectangle.
+    assert out.split("\n")[3] == "          │      allin       │"
+
+
+def test_render_hero_allin_with_no_current_action_shows_allin_not_a_pending_decision_mark():
+    # Même repli côté Héros : "?" est réservé à une décision réellement en
+    # attente -- un Héros tapis n'a plus de décision à prendre.
+    seats = {"BTN": {"stack": 50.0, "action": "", "amount": None}}
+    hero = {"stack": 0.0, "action": "", "amount": None, "status": "allin"}
+    out = r.render(seats=seats, hero_position="BB", hero=hero, board=[], pot=100.0,
+                    acting_order=["BTN"])
+    assert "allin" in out
+    assert "?" not in out

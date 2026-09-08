@@ -14,7 +14,10 @@ la v1 et ne doit pas être perdu") :
 - le timing (snap/tank...) ne s'affiche pas dans la grille, il se raconte en
   prose ailleurs ;
 - fold affiche quand même le montant engagé au tour précédent ;
-- case vide (pas de "...") si le siège n'a pas encore agi ;
+- case vide (pas de "...") si le siège n'a pas encore agi -- mais un siège
+  qui n'a PLUS à agir (couché, ou tapis) l'affiche explicitement (``fold``/
+  ``allin``) même sans action sur la rue courante, jamais une case vide qui
+  laisserait croire à tort qu'il reste à parler ;
 - board + pot centrés à l'intérieur, largeur du rectangle invariante (jamais
   de dépassement qui décale le bord) ;
 - le Héros est toujours affiché en bas ;
@@ -87,8 +90,28 @@ ni SB ni BB).
 
 Abréviation d'archétype (3 lettres, table explicite — ne dépend jamais
 d'une troncature accidentelle) : ``nit``, ``tag``, ``lag`` inchangés,
-``fish`` -> ``fsh``, ``maniac`` -> ``mnc``. Un archétype inconnu retombe sur
-une troncature à 3 caractères (comportement de secours, pas la règle).
+``fish`` -> ``fsh``, ``maniac`` -> ``mnc``, ``calling_station`` -> ``cst``
+(les 7 valeurs de ``state.ARCHETYPES`` hors ``None``). Un archétype inconnu
+retombe sur une troncature à 3 caractères (comportement de secours, pas la
+règle) — mais toute valeur du schéma doit avoir une entrée explicite ici.
+
+Fidélité à l'état : chaque fait porté par ``hand.json`` qui a un impact sur
+la décision du Héros doit être visible dans le dessin, jamais aplati en
+case vide par accident :
+
+- un siège ``folded`` ou ``allin`` qui n'a pas d'action sur la rue courante
+  (parce qu'il a couché/fait tapis sur une rue précédente) affiche quand
+  même son statut (``fold``/``allin``), Héros compris -- sinon indistingua-
+  ble d'un siège actif qui n'a simplement pas encore parlé ;
+- l'ordre de placement (``acting_order``) est l'ordre de SIÈGE PHYSIQUE
+  clockwise depuis la gauche du Héros -- stable sur toute la main, câblé
+  une fois pour toutes par le caller (cf. ``cli.cmd_render``), jamais
+  recalculé depuis un ordre de PAROLE (qui change de rue en rue et n'a rien
+  à voir avec la disposition autour de la table) ;
+- un siège ``out`` (busté, cf. ``new_hand.py``) n'est plus dans la main :
+  au caller de le retirer de ``seats``/``acting_order`` avant l'appel --
+  ``render()`` n'a pas les moyens de le distinguer d'un siège qui n'a pas
+  encore agi.
 """
 from __future__ import annotations
 
@@ -107,6 +130,7 @@ ARCHETYPE_ABBR = {
     "lag": "lag",
     "fish": "fsh",
     "maniac": "mnc",
+    "calling_station": "cst",
 }
 
 
@@ -170,14 +194,19 @@ def render(*, seats: dict[str, dict], hero_position: str, hero: dict, board: lis
         if pos is None:
             return default
         if key == "action":
-            # Régression : un siège couché sur une rue PRÉCÉDENTE n'a aucune
-            # action sur la rue COURANTE (``node["actions"]`` ne couvre que la
-            # rue affichée) -- sans ce repli sur ``status``, la case
-            # redevenait vide au changement de rue, indistincte d'un siège
-            # actif qui n'a simplement pas encore parlé.
+            # Régression : un siège couché ou tapis sur une rue PRÉCÉDENTE
+            # n'a aucune action sur la rue COURANTE (``node["actions"]`` ne
+            # couvre que la rue affichée) -- sans ce repli sur ``status``, la
+            # case redevenait vide au changement de rue, indistincte d'un
+            # siège actif qui n'a simplement pas encore parlé (pour un
+            # tapis, c'est pire : la case vide laisse croire qu'il reste à
+            # agir, ce qui est faux -- l'état affiché mentirait).
             action = seats[pos].get("action", "")
-            if not action and seats[pos].get("status") == "folded":
+            status = seats[pos].get("status")
+            if not action and status == "folded":
                 return "fold"
+            if not action and status == "allin":
+                return "allin"
             if action == "post":
                 return "sb" if pos == "SB" else "bb" if pos == "BB" else "post"
             return action
@@ -264,7 +293,14 @@ def render(*, seats: dict[str, dict], hero_position: str, hero: dict, board: lis
         if n != len(after_idx) - 1:
             lines.append(" " * SIDE_W + "│" + " " * INNER + "│")
 
-    hero_action = hero.get("action") or ("fold" if hero.get("status") == "folded" else "?")
+    # Même repli que pour les autres sièges (cf. s() ci-dessus) : un Héros
+    # tapis sur une rue précédente n'a plus d'action à afficher ici -- ``?``
+    # (case réservée à une décision réellement en attente) mentirait autant
+    # qu'une case vide.
+    hero_status = hero.get("status")
+    hero_action = hero.get("action") or (
+        "fold" if hero_status == "folded" else "allin" if hero_status == "allin" else "?"
+    )
     if hero_action == "post":
         hero_action = "sb" if hero_position == "SB" else "bb" if hero_position == "BB" else "post"
     hero_amount = hero.get("amount")

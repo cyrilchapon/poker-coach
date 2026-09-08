@@ -256,12 +256,31 @@ def cmd_render(args: argparse.Namespace) -> dict[str, Any]:
             d["cards"] = [str(c) for c in seat.cards]
         return d
 
-    seats_out = {labels[s.seat]: seat_dict(s) for s in state.seats if s.seat != state.hero_seat}
+    # Régression : ``render()`` exige un ``acting_order`` = sièges non-Héros
+    # dans l'ordre de SIÈGE PHYSIQUE clockwise depuis la gauche du Héros
+    # (cf. render.py docstring) -- sans le passer explicitement, il retombe
+    # sur l'ordre d'insertion de ``seats_out``, lui-même construit ici en
+    # itérant les sièges physiques 0..n-1 (Héros exclu) : une rotation
+    # différente dès que le Héros n'est pas le dernier siège physique. Les
+    # bonnes données (stack/action) s'affichaient alors au mauvais endroit
+    # autour de la table -- un désaccord invisible tant que le Héros
+    # n'était pas au dernier siège (cas fréquent des fixtures de test, d'où
+    # le passage inaperçu). Un siège ``out`` (busté, cf. new_hand.py) n'est
+    # plus dans la main : on le retire ici, ``render()`` n'a pas de quoi le
+    # distinguer d'un siège qui n'a pas encore agi.
+    clockwise_from_hero = [
+        state.seats[(state.hero_seat + offset) % state.n_seats]
+        for offset in range(1, state.n_seats)
+    ]
+    seated = [seat for seat in clockwise_from_hero if seat.status != "out"]
+    seats_out = {labels[seat.seat]: seat_dict(seat) for seat in seated}
+    acting_order = [labels[seat.seat] for seat in seated]
     hero = state.seats[state.hero_seat]
     d = derive(state)
     ascii_art = render_mod.render(
         seats=seats_out, hero_position=labels[state.hero_seat], hero=seat_dict(hero),
         board=[str(c) for c in state.board], pot=round(d.pot, 2), street=state.street,
+        acting_order=acting_order,
     )
     # En-tête d'état structuré, en plus de l'ASCII (revue live-session) :
     # un rendu écrit à la main plutôt que produit par cette commande, ou un
