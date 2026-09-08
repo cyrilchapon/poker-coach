@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from . import actionline, budget as budget_mod, gates, handclass, texture as texture_mod
+from . import actionline, budget as budget_mod, gates, handclass, sizing as sizing_mod, texture as texture_mod
 from .cards import Card
 from .equity import equity as compute_equity, parse_range
 from .ranges import narrow as narrow_mod, table as range_table
@@ -104,7 +104,8 @@ def compute(raw: dict[str, Any], *, villain_archetype: str | None = None,
                 # existaient mais n'étaient appelées de nulle part — code
                 # mort, cf. README). Câblées ici via le scénario dérivé le
                 # plus proche de ce que le héros affronte réellement.
-                entry = _defend_scenario_entry(state, hero_seat, pot_type, key)
+                entry = _defend_scenario_entry(state, hero_seat, pot_type, key,
+                                                villain_archetype=villain_archetype)
                 if entry is not None:
                     range_json = entry.to_json()
                     range_confidence = entry.confidence
@@ -117,6 +118,16 @@ def compute(raw: dict[str, Any], *, villain_archetype: str | None = None,
             # Préflop hors G0/G1 : zone grise, pas de moteur de budget préflop en v2.0.
             decision = gates.g5_grey_zone(
                 escalate_reason="préflop hors plafond RFI tabulé — jugement du coach requis")
+        # Régression : G1 tranchait "raise"/"raise_or_call" sans jamais
+        # chiffrer de taille -- ni une RFI classique ni une isolation
+        # au-dessus d'un ou plusieurs limps n'ont de gate dédié pour ça
+        # (ce n'est pas une décision grise, juste une formule). `n_limpers`
+        # compte les calls déjà actés sur cette rue -- toujours 0 en RFI
+        # pure (is_opening_decision l'impose), le nombre réel de limpeurs
+        # pour une isolation.
+        if decision.verdict in ("raise", "raise_or_call"):
+            n_limpers = sum(1 for a in state.streets["preflop"]["actions"] if a["action"] == "call")
+            out["sizing"] = sizing_mod.preflop_open_to(n_limpers, villain_archetype=villain_archetype)
         return _finish(out, decision, force_full=force_full)
 
     # --- Postflop -------------------------------------------------------------
@@ -201,7 +212,8 @@ def _has_a_call_after_the_last_raise(state: HandState) -> bool:
 
 
 def _defend_scenario_entry(state: HandState, hero_seat: int, pot_type: str,
-                            key: "range_table.RangeKey") -> "range_table.RangeEntry | None":
+                            key: "range_table.RangeKey",
+                            villain_archetype: str | None = None) -> "range_table.RangeEntry | None":
     """Choisit et calcule le scénario dérivé (``ranges/table.py``) le plus
     proche de la décision de défense affrontée par le héros.
 
@@ -216,7 +228,18 @@ def _defend_scenario_entry(state: HandState, hero_seat: int, pot_type: str,
     - une relance suivie d'un ou plusieurs calls avant le héros
       (opportunité de squeeze POUR le héros) utilise ``squeeze()`` plutôt
       que ``vs_rfi()``, même si ``pot_type()`` classe encore ça comme
-      "srp" (une seule relance a eu lieu jusqu'ici)."""
+      "srp" (une seule relance a eu lieu jusqu'ici).
+
+    ``villain_archetype`` : propagé à ``ranges/table.py`` pour resserrer ou
+    élargir la range de l'agresseur adverse selon son profil (régression :
+    ``--villain-archetype`` était accepté par ``pc brief`` et affichait bien
+    les flags G4, mais n'était JAMAIS transmis au choix de range de défense
+    -- un Fish (PFR bas) qui relance était traité comme un ouvreur standard
+    à largeur tabulée, alors que sa relance signale une main bien plus
+    étroite). ``_is_a_raise_over_a_limp`` détecte en plus le cas où cette
+    même relance a été posée par-dessus un limp (isolation) plutôt que dans
+    un pot vierge -- un signal de force supplémentaire que ``pot_type()``
+    ne distingue pas (une seule relance -> "srp" dans les deux cas)."""
     aggressor = actionline.last_aggressor(state)
     opener_n_behind = derive_n_behind(state, aggressor) if aggressor is not None else 0
 
@@ -224,12 +247,15 @@ def _defend_scenario_entry(state: HandState, hero_seat: int, pot_type: str,
         return range_table.vs_limp(key)
     if pot_type == "srp":
         if _has_a_call_after_the_last_raise(state):
-            return range_table.squeeze(key, opener_n_behind=opener_n_behind)
-        return range_table.vs_rfi(key, opener_n_behind=opener_n_behind)
+            return range_table.squeeze(key, opener_n_behind=opener_n_behind,
+                                        villain_archetype=villain_archetype)
+        return range_table.vs_rfi(key, opener_n_behind=opener_n_behind,
+                                   villain_archetype=villain_archetype,
+                                   iso_over_limp=actionline.is_a_raise_over_a_limp(state))
     if pot_type in ("three_bet_pot", "squeeze"):
-        return range_table.vs_3bet(key)
+        return range_table.vs_3bet(key, villain_archetype=villain_archetype)
     if pot_type == "four_bet_pot":
-        return range_table.vs_4bet(key)
+        return range_table.vs_4bet(key, villain_archetype=villain_archetype)
     return None
 
 

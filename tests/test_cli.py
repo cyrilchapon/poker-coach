@@ -19,7 +19,7 @@ def test_cli_help_never_crashes_for_any_subcommand(capsys):
     # Regression guard: argparse treats "%" in help strings as old-style
     # format specifiers — an unescaped "%pot" crashes --help at parse time.
     for cmd in ["state", "hand", "texture", "line", "budget", "equity", "narrow", "ranges",
-                "brief", "render", "showdown", "sizing", "glossary", "apply"]:
+                "brief", "render", "showdown", "sizing", "glossary", "apply", "assert-state"]:
         with pytest.raises(SystemExit) as exc:
             main([cmd, "--help"])
         assert exc.value.code == 0
@@ -28,7 +28,35 @@ def test_cli_help_never_crashes_for_any_subcommand(capsys):
 def test_cli_state(capsys):
     code, out, err = run(["state", "--hand", HAND], capsys)
     assert code == 0
-    assert json.loads(out)["street"] == "flop"
+    parsed = json.loads(out)
+    assert parsed["street"] == "flop"
+    # Regression: `board` was missing from DerivedState.to_json() -- pc
+    # state/pc brief exposed `street` but not what's actually on it, so a
+    # coach that had drifted onto a stale street had nothing structured to
+    # catch the mismatch against.
+    assert parsed["board"] == ["T♠", "9♥", "2♣"]
+
+
+def test_cli_assert_state_passes_when_it_matches(capsys):
+    code, out, err = run(["assert-state", "--hand", HAND, "--street", "flop",
+                           "--board", "T♠,9♥,2♣"], capsys)
+    assert code == 0, err
+    assert json.loads(out)["ok"] is True
+
+
+def test_cli_assert_state_fails_loudly_on_a_stale_street(capsys):
+    # This is the exact failure mode the report describes: the coach narrated
+    # a turn/river while hand.json was still on the flop. assert-state must
+    # catch that with a non-zero exit rather than let it pass silently.
+    code, out, err = run(["assert-state", "--hand", HAND, "--street", "turn"], capsys)
+    assert code == 1
+    assert "flop" in err and "turn" in err
+
+
+def test_cli_assert_state_fails_on_a_mismatched_board(capsys):
+    code, out, err = run(["assert-state", "--hand", HAND, "--board", "A♠,K♠,Q♠"], capsys)
+    assert code == 1
+    assert "board" in err
 
 
 def test_cli_hand_and_texture(capsys):
@@ -209,6 +237,45 @@ def test_cli_apply_rejects_amount_mismatch_for_deterministic_actions(capsys, tmp
     assert p.read_text() == original
 
 
+def test_cli_render_shows_remaining_stack_not_the_stale_starting_stack(capsys):
+    # Regression: seat_dict() showed the raw `seat.stack` field, which
+    # pc apply/advance_street.py never debit mid-hand (only new_hand.py
+    # reconciles it, at the end of a hand) -- render showed a stale
+    # 100.0bb for both seats after a 46bb pot was contested, while
+    # pc state's effective_stack (correctly derived from remaining_stack)
+    # disagreed. Both must now derive the same number.
+    hand = json.loads(Path(HAND).read_text())
+    hand["streets"]["flop"]["actions"].append({"seat": 0, "action": "call", "amount": 4.0})
+    p = FIXTURES / "_render_stack_check.json"
+    p.write_text(json.dumps(hand))
+    try:
+        code, out, err = run(["render", "--hand", str(p)], capsys)
+        assert code == 0, err
+        ascii_art = json.loads(out)["ascii"]
+        # "amount" is the TOTAL invested on the street, not an increment
+        # (state.py's own convention) -- both seats end this flop having
+        # put in 3.0 (preflop, already the total after their raise/call)
+        # + 4.0 (flop) = 7.0, so 100 - 7.0 = 93.0 each. Was stuck at the
+        # stale starting stack (100.0) before the fix.
+        assert ascii_art.count("93.0") == 2
+        assert "100.0" not in ascii_art
+    finally:
+        p.unlink()
+
+
+def test_cli_render_includes_a_structured_state_header(capsys):
+    # Regression (live-session guardrail): render() only ever returned
+    # {"ascii": ...} -- a hand-written table narrated instead of a real
+    # pc render call, or a pc render on a drifted hand.json, had nothing
+    # structured to diff against. The same derive().to_json() pc state/pc
+    # brief already use is now attached alongside the ascii art.
+    code, out, err = run(["render", "--hand", HAND], capsys)
+    assert code == 0, err
+    parsed = json.loads(out)
+    assert parsed["state"]["street"] == "flop"
+    assert parsed["state"]["board"] == ["T♠", "9♥", "2♣"]
+
+
 def test_cli_render_seat_status_and_folded_seat_stays_visible_on_next_street(capsys):
     # Regression: cmd_render's seat_dict() dropped seat.status entirely, and
     # a folded seat's "action" only comes from the CURRENT street's actions
@@ -223,10 +290,36 @@ def test_cli_render_seat_status_and_folded_seat_stays_visible_on_next_street(cap
     assert "fold" in ascii_art
 
 
+def test_cli_sizing_preflop_open_to(capsys):
+    code, out, err = run(["sizing", "preflop-open-to", "--limpers", "2",
+                           "--villain-archetype", "fish"], capsys)
+    assert code == 0, err
+    result = json.loads(out)
+    assert result["raise_to_bb"] == pytest.approx(6.0)  # 3 + 2 + 1 (fish bump)
+
+
 def test_cli_glossary_unknown_term_errors(capsys):
     code, out, err = run(["glossary", "not-a-real-term"], capsys)
     assert code == 1
     assert "inconnu" in err
+
+
+def test_cli_glossary_resolves_aliases_and_new_terms(capsys):
+    # Regression: "isolation" ("terme inconnu") when "iso-raise" already
+    # covered the concept, and fold_equity/multiway/equity_realization/
+    # realisation_equite were entirely missing despite being used
+    # constantly in session.
+    code, out, err = run(["glossary", "isolation"], capsys)
+    assert code == 0, err
+    iso = json.loads(out)["definition"]
+    code, out, err = run(["glossary", "iso-raise"], capsys)
+    assert json.loads(out)["definition"] == iso  # same canonical entry
+
+    for term in ["fold_equity", "multiway", "stab", "calling station",
+                 "equity_realization", "realisation_equite"]:
+        code, out, err = run(["glossary", term], capsys)
+        assert code == 0, f"{term}: {err}"
+        assert json.loads(out)["definition"]
 
 
 def test_cli_glossary_has_implied_and_reverse_implied_odds(capsys):

@@ -72,6 +72,37 @@ def test_finds_sibling_skill_layout(tmp_path):
     assert engine_dir in candidates
 
 
+def test_env_var_wins_even_when_scripts_dir_was_moved_somewhere_unrelated(tmp_path, monkeypatch):
+    # Regression: copying scripts/ out of its plugin layout (e.g. to make it
+    # writable) defeats every ancestor/sibling-based strategy -- there is
+    # nothing left nearby to find. POKERCOACH_ENGINE_DIR must short-circuit
+    # all of that.
+    engine_dir = _make_engine(tmp_path / "somewhere" / "engine")
+    orphan_script_dir = tmp_path / "totally-unrelated" / "copied-scripts"
+    orphan_script_dir.mkdir(parents=True)
+
+    monkeypatch.setitem(sys.modules, "pokercoach", None)
+    monkeypatch.setattr(pc_bootstrap, "__file__", str(orphan_script_dir / "pc_bootstrap.py"))
+    monkeypatch.setenv("POKERCOACH_ENGINE_DIR", str(engine_dir))
+
+    original_sys_path = list(sys.path)
+    try:
+        found = pc_bootstrap.ensure_pokercoach_on_path()
+        assert found == engine_dir
+        assert str(engine_dir) in sys.path
+    finally:
+        sys.path[:] = original_sys_path
+
+
+def test_env_var_pointing_nowhere_raises_a_clear_error(tmp_path, monkeypatch):
+    monkeypatch.setenv("POKERCOACH_ENGINE_DIR", str(tmp_path / "does-not-exist"))
+    try:
+        pc_bootstrap.ensure_pokercoach_on_path()
+        assert False, "expected RuntimeError"
+    except RuntimeError as exc:
+        assert "POKERCOACH_ENGINE_DIR" in str(exc)
+
+
 def test_ensure_pokercoach_on_path_inserts_sys_path_for_sibling_layout(tmp_path, monkeypatch):
     plugins_dir = tmp_path / "plugins"
     plugins_dir.mkdir()

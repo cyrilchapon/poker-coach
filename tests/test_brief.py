@@ -289,6 +289,41 @@ def test_brief_defends_vs_limp():
     assert out["gate"] == "G1"
     assert out["range"]["scenario"] == "vs_limp"
     assert out["verdict"] == "raise_or_call"
+    # Regression: G1 rendered "raise_or_call" on an isolation decision with
+    # no sizing attached at all -- the coach had nothing but its own
+    # judgment for "how much". 3bb base + 1bb for the one limper (seat3).
+    assert out["sizing"]["raise_to_bb"] == pytest.approx(4.0)
+    assert out["sizing"]["n_limpers"] == 1
+
+
+def test_brief_preflop_sizing_bumps_for_a_calling_station_and_scales_with_limpers():
+    raw = {
+        "schema_version": "2.0",
+        "table": {"big_blind": 1.0, "ante": 0.0, "button_seat": 0},
+        "seats": [
+            {"seat": 0, "is_hero": True, "stack": 200.0, "archetype": None, "hud": None,
+             "cards": ["A♠", "A♥"], "status": "active"},
+            {"seat": 1, "is_hero": False, "stack": 200.0, "archetype": None, "hud": None,
+             "cards": None, "status": "active"},
+            {"seat": 2, "is_hero": False, "stack": 200.0, "archetype": None, "hud": None,
+             "cards": None, "status": "active"},
+            {"seat": 3, "is_hero": False, "stack": 200.0, "archetype": None, "hud": None,
+             "cards": None, "status": "active"},
+        ],
+        "streets": {
+            "preflop": {"actions": [
+                {"seat": 1, "action": "post", "amount": 0.5},
+                {"seat": 2, "action": "post", "amount": 1.0},
+                {"seat": 3, "action": "call", "amount": 1.0},  # one limper
+            ]},
+            "flop": None, "turn": None, "river": None,
+        },
+        "to_act": 0, "hero_seat": 0,
+    }
+    plain = brief.compute(raw)
+    vs_station = brief.compute(raw, villain_archetype="calling_station")
+    assert plain["sizing"]["raise_to_bb"] == pytest.approx(4.0)   # 3 + 1*1
+    assert vs_station["sizing"]["raise_to_bb"] == pytest.approx(5.0)  # 3 + 1*1 + 1 (bump)
 
 
 def test_brief_facing_a_raise_and_a_caller_squeezes_not_just_defends_vs_rfi():

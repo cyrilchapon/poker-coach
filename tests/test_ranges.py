@@ -48,6 +48,50 @@ def test_vs_rfi_defends_wider_against_a_looser_opener():
     assert vs_btn.pct > vs_utg.pct
 
 
+def test_vs_rfi_tightens_for_a_passive_archetype_that_still_raised():
+    # Regression: --villain-archetype was accepted by pc brief but never
+    # threaded down to the defend-range lookup -- a fish/calling_station
+    # RAISING (not just calling) is a stronger signal than their table
+    # image, not a wider one.
+    state = validate_and_load(minimal_hand(6, button_seat=0, hero_seat=2))  # BB defending
+    key = table.derive_key(state, 2, scenario="vs_rfi")
+    plain = table.vs_rfi(key, opener_n_behind=4)
+    vs_fish = table.vs_rfi(key, opener_n_behind=4, villain_archetype="fish")
+    vs_maniac = table.vs_rfi(key, opener_n_behind=4, villain_archetype="maniac")
+    assert vs_fish.pct < plain.pct
+    assert vs_maniac.pct > plain.pct
+
+
+def test_vs_rfi_tightens_further_for_a_raise_over_a_limp():
+    # Regression: a raise over a limp (isolation, dead money + an already-
+    # committed player) was treated identically to a raise into an empty
+    # pot -- same "vs ouverture" note either way.
+    state = validate_and_load(minimal_hand(6, button_seat=0, hero_seat=2))
+    key = table.derive_key(state, 2, scenario="vs_rfi")
+    plain = table.vs_rfi(key, opener_n_behind=4)
+    iso = table.vs_rfi(key, opener_n_behind=4, iso_over_limp=True)
+    assert iso.pct < plain.pct
+
+
+def test_is_a_raise_over_a_limp_detects_the_iso_not_a_plain_open():
+    from pokercoach.actionline import is_a_raise_over_a_limp
+
+    hand = minimal_hand(6, button_seat=0, hero_seat=2)
+    hand["streets"]["preflop"]["actions"] = [
+        {"seat": 3, "action": "call", "amount": 1.0},   # UTG limps
+        {"seat": 4, "action": "raise", "amount": 6.0},  # HJ isolates over the limp
+    ]
+    state = validate_and_load(hand)
+    assert is_a_raise_over_a_limp(state) is True
+
+    hand2 = minimal_hand(6, button_seat=0, hero_seat=2)
+    hand2["streets"]["preflop"]["actions"] = [
+        {"seat": 4, "action": "raise", "amount": 3.0},  # HJ opens a fresh pot
+    ]
+    state2 = validate_and_load(hand2)
+    assert is_a_raise_over_a_limp(state2) is False
+
+
 def test_vs_limp_widens_over_rfi():
     state = validate_and_load(minimal_hand(6, button_seat=0, hero_seat=5))  # CO
     key = table.derive_key(state, 5)

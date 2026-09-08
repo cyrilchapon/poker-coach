@@ -431,6 +431,7 @@ def effective_stack(state: HandState, *, seat: int | None = None) -> float:
 class DerivedState:
     schema_version: str
     street: str
+    board: list[Card]
     hero_seat: int
     hero_position: str
     to_act: int
@@ -449,6 +450,16 @@ class DerivedState:
         return {
             "schema_version": self.schema_version,
             "street": self.street,
+            # Régression (revue live-session) : ni `pc state` ni `pc brief`
+            # n'exposaient le board dans leur en-tête d'état -- seulement
+            # `street`. Un coach qui narre une rue à la main (au lieu
+            # d'appeler `pc render`/`pc advance_street.py`) peut dériver
+            # sans que rien dans la sortie structurée ne le signale : `pc
+            # brief`/`pc state` continuent de tourner sur la VRAIE rue en
+            # mémoire pendant que le texte affiché au joueur en décrit une
+            # autre. Le board explicite ici rend cette dérive visible d'un
+            # coup d'œil (et vérifiable mécaniquement, cf. `pc assert-state`).
+            "board": [str(c) for c in self.board],
             "hero_seat": self.hero_seat,
             "hero_position": self.hero_position,
             "to_act": self.to_act,
@@ -514,6 +525,7 @@ def derive(state: HandState) -> DerivedState:
     return DerivedState(
         schema_version=str(state.raw.get("schema_version", "2.0")),
         street=state.street,
+        board=state.board,
         hero_seat=state.hero_seat,
         hero_position=labels[state.hero_seat],
         to_act=state.to_act,
