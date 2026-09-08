@@ -239,6 +239,34 @@ def vs_limp(key: RangeKey) -> RangeEntry:
                        note="isolation élargie face à un limp — traiter en scénario exploitant, pas dégénéré")
 
 
+def bb_defense_multiway(key: RangeKey, *, opener_n_behind: int, n_callers: int,
+                         villain_archetype: str | None = None) -> RangeEntry:
+    """Défense multiway : le héros CLÔT l'action (personne d'actif ne parle
+    plus après lui sur cette rue, cf. ``state.players_to_act_behind``) face à
+    une ouverture suivie d'un ou plusieurs calls devant lui. C'est une
+    décision call/fold aux cotes du pot, PAS une relance polarisée -- à
+    distinguer de ``squeeze()`` (une 3bet par-dessus l'open + au moins un
+    call), qui suppose que le héros choisit d'agresser, pas qu'il ferme
+    l'action en pot-limité (rapport de bug live-session #2 : le dispatch
+    précédent retournait toujours ``squeeze()`` dès qu'un call suivait la
+    dernière relance, quelle que soit la position du héros dans l'ordre de
+    parole -- une BB qui ferme l'action se voyait servir la range polarisée
+    d'un spot de relance qu'elle n'était pas en train de jouer)."""
+    base = vs_rfi(key, opener_n_behind=opener_n_behind, villain_archetype=villain_archetype)
+    if base.pct == 0:
+        return base
+    # Cotes du pot meilleures qu'un face-à-face heads-up (argent mort des
+    # callers déjà entrés) -> défendre un peu plus large, borné pour ne pas
+    # dériver vers une range absurdement large avec beaucoup de callers.
+    multiway_factor = min(1.5, 1.0 + 0.15 * max(0, n_callers))
+    pct = round(min(100.0, base.pct * multiway_factor), 1)
+    return RangeEntry(
+        scenario="bb_defense_multiway", range=top_pct_range(pct), pct=pct, confidence="extrapolated",
+        note=(f"défense multiway ({n_callers} caller(s) déjà entré(s)) -- range de call/fold, "
+              "le héros clôture l'action, ce n'est pas un squeeze"),
+    )
+
+
 def squeeze(key: RangeKey, *, opener_n_behind: int, villain_archetype: str | None = None) -> RangeEntry:
     base = vs_rfi(key, opener_n_behind=opener_n_behind, villain_archetype=villain_archetype)
     if base.pct == 0:

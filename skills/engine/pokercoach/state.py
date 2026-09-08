@@ -327,6 +327,42 @@ def n_behind(state: HandState, seat: int) -> int:
     return len(order) - 1 - order.index(offset)
 
 
+def acting_order_seats(state: HandState) -> list[int]:
+    """Ordre de parole (sièges physiques) pour la rue COURANTE de ``state`` :
+    ordre préflop si ``state.street == "preflop"``, ordre postflop sinon."""
+    n = state.n_seats
+    offsets = (preflop_acting_order_offsets(n) if state.street == "preflop"
+               else postflop_acting_order_offsets(n))
+    return [(state.button_seat + off) % n for off in offsets]
+
+
+def players_to_act_behind(state: HandState, *, seat: int | None = None) -> int:
+    """Nombre de sièges encore ACTIFS (status == "active") devant parler
+    APRÈS ``seat`` (``to_act`` par défaut) sur la rue courante, dans l'ordre
+    de parole de cette rue -- réel décompte "reste-t-il quelqu'un derrière
+    moi", pas une mesure structurelle comme ``n_behind`` (qui, elle, ignore
+    les folds déjà survenus et sert de clé d'indexation de range). 0 signifie
+    que ``seat`` clôt l'action sur cette rue si personne ne relance derrière
+    lui -- cf. régression revue live-session #1 : rien dans `pc state`/`pc
+    brief` ne répondait à cette question, ce qui a fait affirmer à tort au
+    coach qu'un héros en BB (dernier à parler) ne fermait pas l'action.
+
+    Un siège all-in ne peut plus agir : il n'est pas compté ici, alors qu'il
+    l'est dans ``players_active``/``n_defenders`` (encore en lice pour le
+    pot, mais plus dans l'ordre de parole)."""
+    seat = state.to_act if seat is None else seat
+    order = [s for s in acting_order_seats(state) if state.seats[s].status == "active"]
+    idx = order.index(seat)
+    return len(order) - idx - 1
+
+
+def hero_closes_action(state: HandState) -> bool:
+    """``True`` si ``to_act`` est le dernier siège encore actif à parler sur
+    la rue courante (aucun joueur actif derrière lui) -- dérivé booléen de
+    ``players_to_act_behind`` pour simplifier l'usage côté skill."""
+    return players_to_act_behind(state) == 0
+
+
 def ip_postflop(state: HandState, seat: int) -> bool:
     """Le héros sera-t-il en position après le flop contre le caller le plus
     probable ? Simplifié en : ``seat`` est-il le bouton ? (le bouton est
@@ -445,6 +481,8 @@ class DerivedState:
     effective_stack: float
     players_active: int
     n_defenders: int
+    players_to_act_behind: int
+    hero_closes_action: bool
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -473,6 +511,8 @@ class DerivedState:
             "effective_stack": round(self.effective_stack, 4),
             "players_active": self.players_active,
             "n_defenders": self.n_defenders,
+            "players_to_act_behind": self.players_to_act_behind,
+            "hero_closes_action": self.hero_closes_action,
         }
 
 
@@ -539,4 +579,6 @@ def derive(state: HandState) -> DerivedState:
         effective_stack=eff,
         players_active=players_active(state),
         n_defenders=n_def,
+        players_to_act_behind=players_to_act_behind(state),
+        hero_closes_action=hero_closes_action(state),
     )

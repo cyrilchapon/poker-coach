@@ -20,8 +20,10 @@ cf. references/03-multiway-generalization.md :
   descendant. Une bonne approximation, pas une reproduction exacte des
   seuils de l'annexe (non publiés à ce niveau de détail).
 - **Underpair** (paire de poche sous toutes les cartes du board, ne touchant
-  pas le board) n'a pas de classe dédiée dans la taxonomie PokerSkill à 15
-  classes : rangée dans ``weak_showdown``.
+  pas le board) : classe ``underpair``, ajoutée à la taxonomie PokerSkill à
+  15 classes (rapport de bug live-session #4 -- classe trop fréquente pour
+  rester noyée dans ``weak_showdown``). Budgets ATT/DEF encore alignés sur
+  ``weak_showdown`` faute de calibration dédiée, cf. ``budget.py``.
 - **Tirages** : classification simplifiée par seuils monotones (rang de la
   couleur, ouverture de la quinte, somme des rangs pour les surcartes) —
   pas de détection des combinaisons "backdoor". Les ``outs`` restent EXACTS
@@ -60,6 +62,7 @@ class HandClass:
     draw: str | None
     draw_sub: dict[str, Any]
     outs: int | None
+    outs_winning: int | None
     blockers: list[str]
     distance_to_boundary: float
 
@@ -71,6 +74,7 @@ class HandClass:
             "draw": self.draw,
             "draw_sub": self.draw_sub,
             "outs": self.outs,
+            "outs_winning": self.outs_winning,
             "blockers": self.blockers,
             "distance_to_boundary": round(self.distance_to_boundary, 2),
         }
@@ -86,13 +90,16 @@ def classify(hole: list[Card], board: list[Card]) -> HandClass:
     made, made_sub, distance = _classify_made(hole, board, texture)
     board_override = texture.special if texture.special else None
     draw, draw_sub = _classify_draw(hole, board, texture)
-    outs = _count_outs(hole, board) if len(board) < 5 else None
+    if len(board) < 5:
+        outs, outs_winning = _count_outs(hole, board)
+    else:
+        outs, outs_winning = None, None
     blockers = _blockers(hole, board, texture)
 
     return HandClass(
         made=made, made_sub=made_sub, board_override=board_override,
-        draw=draw, draw_sub=draw_sub, outs=outs, blockers=blockers,
-        distance_to_boundary=distance,
+        draw=draw, draw_sub=draw_sub, outs=outs, outs_winning=outs_winning,
+        blockers=blockers, distance_to_boundary=distance,
     )
 
 
@@ -257,7 +264,7 @@ def _classify_pair_family(hole: list[Card], board: list[Card], texture: Texture)
         pocket_rank_idx = hole[0].rank_index
         if board and pocket_rank_idx > RANKS.index(board_ranks_sorted[0]):
             return "overpair", {"pocket_rank": hole[0].rank}, 1.0
-        return "weak_showdown", {"note": "underpair, non couvert par la taxonomie à 15 classes"}, 1.0
+        return "underpair", {"pocket_rank": hole[0].rank}, 1.0
 
     matched = [c for c in hole if board_rank_counts.get(c.rank, 0) >= 1]
     if not matched:
@@ -449,7 +456,31 @@ def _is_pure_board_pairing_for_a_made_hand(hole: list[Card], board: list[Card], 
     return candidate.rank in board_ranks and candidate.rank not in hole_ranks
 
 
-def _count_outs(hole: list[Card], board: list[Card]) -> int:
+def _is_pure_board_pairing(hole: list[Card], board: list[Card], candidate: Card) -> bool:
+    """Généralisation de ``_is_pure_board_pairing_for_a_made_hand`` SANS
+    l'exemption "paire de poche" : vrai si ``candidate`` apparie un rang déjà
+    présent au board sans toucher NI L'UNE NI L'AUTRE des deux cartes du
+    héros -- y compris quand ces deux cartes forment une paire de poche.
+
+    Rapport de bug live-session #3 : sur 2♦2♠ / 6♠9♥4♥, ``_count_outs``
+    compte 11 outs (2 brelan + 9 qui apparient un rang du board -> "deux
+    paires"). Ce chiffre est correct pour la définition documentée de
+    ``outs`` ("améliore la CATÉGORIE"), mais dangereux affiché à côté de
+    ``pot_odds`` : une carte qui apparie le board reste tout aussi partagée
+    par N'IMPORTE QUEL adversaire, paire de poche ou pas -- l'exemption
+    accordée aux paires de poche dans ``_is_pure_board_pairing_for_a_made_hand``
+    (nécessaire pour ne pas exclure le cas légitime où LE HÉROS pairait sa
+    PROPRE carte) ne dit rien de la force relative de la main obtenue au
+    showdown : une double paire avec un 2 en kicker perd face à quiconque a
+    un meilleur kicker ou la paire du dessus. Utilisée uniquement pour
+    ``outs_winning``, jamais pour ``outs`` (comportement historique inchangé,
+    contractuel avec les tests round 1-3)."""
+    hole_ranks = {c.rank for c in hole}
+    board_ranks = {c.rank for c in board}
+    return candidate.rank in board_ranks and candidate.rank not in hole_ranks
+
+
+def _count_outs(hole: list[Card], board: list[Card]) -> tuple[int, int]:
     # Régression (round 1) : comparer le score BRUT (`evaluate(...) > current`)
     # comptait presque toutes les cartes restantes comme "out", parce
     # qu'ajouter une 6e/7e carte connue améliore quasi toujours légèrement le
@@ -494,6 +525,7 @@ def _count_outs(hole: list[Card], board: list[Card]) -> int:
     remaining = [c for c in FULL_DECK if c not in known]
 
     outs = 0
+    outs_winning = 0
     for c in remaining:
         hero_idx = HAND_CATEGORIES.index(handtype(evaluate(hole + board + [c])))
         if hero_idx <= current_category_idx:
@@ -506,7 +538,20 @@ def _count_outs(hole: list[Card], board: list[Card]) -> int:
         if hero_idx <= neutral_idx:
             continue  # amélioration générique (ex. le board s'apparie) -- pas spécifique au héros
         outs += 1
-    return outs
+        # `outs_winning` : plus strict que `outs` -- exclut EN PLUS le cas
+        # d'une paire de poche qui n'améliore sa CATÉGORIE qu'en appariant un
+        # rang du board (cf. `_is_pure_board_pairing`, docstring ci-dessus).
+        # `outs` garde ces cartes (comportement historique), `outs_winning`
+        # ne les compte plus : elles font gagner la classe de main, pas
+        # nécessairement la main. Restreint à `hero_already_has_a_pair`
+        # (même garde que ci-dessus) pour ne pas exclure à tort une carte
+        # qui complète un tirage couleur/quinte dont le rang coïncide par
+        # hasard avec un rang du board (cf. test_outs_keeps_a_flush_
+        # completion_that_happens_to_share_a_board_rank).
+        if hero_already_has_a_pair and _is_pure_board_pairing(hole, board, c):
+            continue
+        outs_winning += 1
+    return outs, outs_winning
 
 
 def _blockers(hole: list[Card], board: list[Card], texture: Texture) -> list[str]:

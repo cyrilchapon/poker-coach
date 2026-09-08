@@ -27,7 +27,8 @@ from . import actionline, budget as budget_mod, gates, handclass, sizing as sizi
 from .cards import Card
 from .equity import equity as compute_equity, equity_multiway as compute_equity_multiway, parse_range
 from .ranges import narrow as narrow_mod, table as range_table
-from .state import STREETS, HandState, StateError, derive, n_behind as derive_n_behind, validate_and_load
+from .state import (STREETS, HandState, StateError, derive, n_behind as derive_n_behind,
+                     players_to_act_behind as derive_players_to_act_behind, validate_and_load)
 
 WIDE_VILLAIN_SEED = ("22+,A2s+,K2s+,Q4s+,J6s+,T6s+,96s+,86s+,75s+,64s+,53s+,"
                      "A2o+,K8o+,Q9o+,J9o+,T9o")
@@ -257,6 +258,17 @@ def _has_a_call_after_the_last_raise(state: HandState) -> bool:
     return any(a["action"] == "call" for a in actions[raise_indices[-1] + 1:])
 
 
+def _n_calls_after_the_last_raise(state: HandState) -> int:
+    """Nombre de calls survenus après la dernière relance préflop -- le
+    nombre de "morts" déjà entrés dans le pot pour la formule de défense
+    multiway (``ranges.table.bb_defense_multiway``)."""
+    actions = state.streets["preflop"]["actions"]
+    raise_indices = [i for i, a in enumerate(actions) if a["action"] in ("raise", "allin")]
+    if not raise_indices:
+        return 0
+    return sum(1 for a in actions[raise_indices[-1] + 1:] if a["action"] == "call")
+
+
 def _defend_scenario_entry(state: HandState, hero_seat: int, pot_type: str,
                             key: "range_table.RangeKey",
                             villain_archetype: str | None = None) -> "range_table.RangeEntry | None":
@@ -274,7 +286,13 @@ def _defend_scenario_entry(state: HandState, hero_seat: int, pot_type: str,
     - une relance suivie d'un ou plusieurs calls avant le héros
       (opportunité de squeeze POUR le héros) utilise ``squeeze()`` plutôt
       que ``vs_rfi()``, même si ``pot_type()`` classe encore ça comme
-      "srp" (une seule relance a eu lieu jusqu'ici).
+      "srp" (une seule relance a eu lieu jusqu'ici) -- SAUF si le héros
+      CLÔT l'action (``state.players_to_act_behind == 0``, personne
+      d'actif ne parle plus derrière lui) : dans ce cas il n'est pas en
+      train de squeezer, il défend (``bb_defense_multiway()``) -- cf.
+      rapport de bug live-session #2 (une BB en fin de parole se voyait
+      servir une range de squeeze polarisée pour une décision de simple
+      call/fold).
 
     ``villain_archetype`` : propagé à ``ranges/table.py`` pour resserrer ou
     élargir la range de l'agresseur adverse selon son profil (régression :
@@ -293,6 +311,11 @@ def _defend_scenario_entry(state: HandState, hero_seat: int, pot_type: str,
         return range_table.vs_limp(key)
     if pot_type == "srp":
         if _has_a_call_after_the_last_raise(state):
+            if derive_players_to_act_behind(state) == 0:
+                return range_table.bb_defense_multiway(
+                    key, opener_n_behind=opener_n_behind,
+                    n_callers=_n_calls_after_the_last_raise(state),
+                    villain_archetype=villain_archetype)
             return range_table.squeeze(key, opener_n_behind=opener_n_behind,
                                         villain_archetype=villain_archetype)
         return range_table.vs_rfi(key, opener_n_behind=opener_n_behind,

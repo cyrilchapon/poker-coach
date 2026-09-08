@@ -44,6 +44,7 @@ pair_class_penalties:
     third_pair:  { levels: -3.5 }
     fourth_fifth_pair: { levels: -3.5 }
     weak_showdown: { levels: -3.5 }
+    underpair: { levels: -3.5 }
     nuts_high: { def: 0.0 }
     second_high: { def: 0.0 }
   one_card_straight_open_ended:

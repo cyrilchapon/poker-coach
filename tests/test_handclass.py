@@ -94,9 +94,14 @@ def test_second_and_third_pair():
     assert third.made == "third_pair"
 
 
-def test_underpair_is_weak_showdown():
+def test_underpair_has_its_own_class():
+    # Regression (live-session bug report #4) : an underpair (pocket pair
+    # strictly below every board card) used to fall into weak_showdown, with
+    # the engine's own note flagging it as "not covered by the taxonomy" --
+    # frequent enough (any failed set-mine) to deserve its own class.
     r = H(["5♠", "5♥"], ["9♦", "8♣", "2♥"])
-    assert r.made == "weak_showdown"
+    assert r.made == "underpair"
+    assert r.made_sub == {"pocket_rank": "5"}
 
 
 def test_high_card_buckets():

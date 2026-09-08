@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -116,10 +117,21 @@ def cmd_budget(args: argparse.Namespace) -> dict[str, Any]:
 
 # --- equity / narrow ---------------------------------------------------------
 
+def _split_card_tokens(s: str) -> list[str]:
+    """Découpe une liste de cartes séparées par des virgules -- et tolère
+    aussi l'espace comme séparateur (rapport de bug live-session #5b :
+    ``--hand "SB:7♣ 5♠"`` échouait avec un message trompeur, "carte invalide
+    (2 caractères attendus) : '7♣ 5♠'", qui parle d'UNE carte alors que le
+    vrai problème est le séparateur d'une LISTE de cartes -- accepter
+    l'espace en plus de la virgule règle le cas d'usage sans avoir à
+    apprendre une convention de saisie supplémentaire)."""
+    return [t for t in re.split(r"[,\s]+", s.strip()) if t]
+
+
 def _parse_card_list(s: str | None) -> list[Card]:
     if not s:
         return []
-    return parse_cards([t for t in s.split(",") if t])
+    return parse_cards(_split_card_tokens(s))
 
 
 def cmd_equity(args: argparse.Namespace) -> dict[str, Any]:
@@ -242,6 +254,26 @@ def cmd_render(args: argparse.Namespace) -> dict[str, Any]:
         for act in node["actions"]:
             if act["seat"] == seat.seat:
                 action, amount = act["action"], act.get("amount")
+        # Régression (revue live-session #5a) : un siège couché/tapis sur une
+        # rue PRÉCÉDENTE n'a par définition aucune entrée dans les actions de
+        # la rue COURANTE -- `amount` restait à `None` (rendu vide par
+        # render.py) alors que le docstring de render.py promet que "fold
+        # affiche quand même le montant engagé" ; ``action`` bénéficiait déjà
+        # d'un repli sur ``status`` (cf. ``render.s()``), mais rien
+        # n'existait côté ``amount``. On relit ici le montant de sa toute
+        # DERNIÈRE action connue (n'importe quelle rue, jusqu'à la rue
+        # courante incluse) -- c'est nécessairement son montant final, un
+        # siège couché/tapis ne pouvant plus agir ensuite.
+        if not action and seat.status in ("folded", "allin"):
+            for street in STREETS:
+                street_node = state.streets.get(street)
+                if street_node is None:
+                    break
+                for act in street_node["actions"]:
+                    if act["seat"] == seat.seat:
+                        amount = act.get("amount")
+                if street == state.street:
+                    break
         # Régression : ``seat.stack`` est le stack de DÉBUT DE MAIN, jamais
         # débité par `pc apply`/`advance_street.py` en cours de main (seul
         # `new_hand.py` réconcilie, en fin de main) -- l'afficher tel quel
@@ -294,11 +326,11 @@ def cmd_render(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def cmd_showdown(args: argparse.Namespace) -> dict[str, Any]:
-    board = parse_cards(args.board.split(","))
+    board = parse_cards(_split_card_tokens(args.board))
     hands = []
     for h in args.hand_entry:
         name, cards_str = h.split(":")
-        hands.append((name, parse_cards(cards_str.split(","))))
+        hands.append((name, parse_cards(_split_card_tokens(cards_str))))
     return {"results": [r.to_json() for r in showdown_mod.resolve(board, hands)]}
 
 
@@ -487,7 +519,7 @@ def cmd_assert_state(args: argparse.Namespace) -> dict[str, Any]:
 
     if args.board is not None:
         try:
-            expected_board = parse_cards([c for c in args.board.split(",") if c])
+            expected_board = parse_cards(_split_card_tokens(args.board))
         except CardError as exc:
             raise StateError(f"--board invalide : {exc}") from exc
         if expected_board != state.board:
