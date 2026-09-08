@@ -33,6 +33,20 @@ WIDE_VILLAIN_SEED = ("22+,A2s+,K2s+,Q4s+,J6s+,T6s+,96s+,86s+,75s+,64s+,53s+,"
                      "A2o+,K8o+,Q9o+,J9o+,T9o")
 NARROW_VILLAIN_SEED = "22+,A9s+,KTs+,QTs+,JTs,T9s,98s,ATo+,KQo"
 
+# Itérations Monte-Carlo pour l'équité multiway d'un squeeze décliné
+# (_compute_preflop_squeeze_equity_section ci-dessous). Revue #7 : au défaut
+# du module (equity.DEFAULT_MULTIWAY_ITERATIONS = 20 000), ce chemin coûtait
+# ~8s par appel à ``equity_multiway`` (4 villains) -- appelé deux fois par
+# brief (wide + narrow), soit ~15-30s pour UN SEUL `pc brief` sur exactement
+# le spot que cette PR corrige (squeeze décliné, en session chronométrée).
+# Mesuré sur le repro de la revue : l'équité à 3000 itérations (0.1334) reste
+# à 0.0017 de la valeur à 20000 (0.1317), largement dans UNCERTAINTY_BAND
+# (0.04) -- aucun changement de verdict possible à cet écart, pour ~7x moins
+# de temps par appel. Ne corrige pas la racine (le filtrage de range répété
+# par itération, cf. equity.py) mais rend ce chemin utilisable en session
+# réelle sans y toucher.
+SQUEEZE_DECLINED_EQUITY_ITERATIONS = 3000
+
 
 def compute(raw: dict[str, Any], *, villain_archetype: str | None = None,
             force_full: bool = False) -> dict[str, Any]:
@@ -372,7 +386,8 @@ def _compute_preflop_squeeze_equity_section(state: HandState, hero_cards: list[C
     values: dict[str, float] = {}
     for label, seed in (("wide", WIDE_VILLAIN_SEED), ("narrow", NARROW_VILLAIN_SEED)):
         try:
-            values[label] = compute_equity_multiway(hero_combo, [seed] * n_opponents_active)
+            values[label] = compute_equity_multiway(hero_combo, [seed] * n_opponents_active,
+                                                      iterations=SQUEEZE_DECLINED_EQUITY_ITERATIONS)
         except ValueError:
             continue  # range vide une fois les conflits de cartes retirés -> exclue plutôt que de planter
 
