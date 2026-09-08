@@ -125,7 +125,18 @@ def compute(raw: dict[str, Any], *, villain_archetype: str | None = None,
         # compte les calls déjà actés sur cette rue -- toujours 0 en RFI
         # pure (is_opening_decision l'impose), le nombre réel de limpeurs
         # pour une isolation.
-        if decision.verdict in ("raise", "raise_or_call"):
+        # `verdict_if_in_range` vaut "raise_or_call" par défaut aussi bien pour
+        # une ouverture/isolation (héros premier relanceur) que pour une
+        # défense contre un raise/3bet/4bet déjà posé (vs_rfi/squeeze/vs_3bet/
+        # vs_4bet) -- dans ce second cas "raise" veut dire "sur-relancer",
+        # pas "ouvrir à 3bb + 1bb/limpeur" : la formule d'ouverture serait
+        # sans rapport avec le pot réel (voire, face à un 4bet, pas une
+        # relance légale). On ne l'attache donc que tant qu'aucun raise/allin
+        # n'a encore eu lieu sur la rue -- ce qui couvre RFI et isolation
+        # par-dessus des limps, mais pas la réponse à une relance adverse.
+        no_raise_yet = not any(a["action"] in ("raise", "allin")
+                                for a in state.streets["preflop"]["actions"])
+        if decision.verdict in ("raise", "raise_or_call") and no_raise_yet:
             n_limpers = sum(1 for a in state.streets["preflop"]["actions"] if a["action"] == "call")
             out["sizing"] = sizing_mod.preflop_open_to(n_limpers, villain_archetype=villain_archetype)
         return _finish(out, decision, force_full=force_full)

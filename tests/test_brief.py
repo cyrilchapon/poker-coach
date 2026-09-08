@@ -326,6 +326,44 @@ def test_brief_preflop_sizing_bumps_for_a_calling_station_and_scales_with_limper
     assert vs_station["sizing"]["raise_to_bb"] == pytest.approx(5.0)  # 3 + 1*1 + 1 (bump)
 
 
+def test_brief_does_not_attach_opening_sizing_when_defending_vs_an_existing_raise():
+    # Regression (PR #6 review): `verdict_if_in_range` defaults to
+    # "raise_or_call" for vs_rfi/squeeze/vs_3bet/vs_4bet just as much as for
+    # a plain RFI/isolation -- there "raise" means "re-raise the villain",
+    # not "open to 3bb + 1bb/limper". Attaching preflop_open_to() here would
+    # hand the coach a number unrelated to the real pot (and, facing a
+    # 4bet, one that isn't even a legal raise). No `sizing` key at all is
+    # the correct output until a real vs-raise sizing formula exists.
+    raw = {
+        "schema_version": "2.0",
+        "table": {"big_blind": 1.0, "ante": 0.0, "button_seat": 0},
+        "seats": [
+            {"seat": 0, "is_hero": False, "stack": 200.0, "archetype": None, "hud": None,
+             "cards": None, "status": "active"},
+            {"seat": 1, "is_hero": False, "stack": 200.0, "archetype": None, "hud": None,
+             "cards": None, "status": "active"},
+            {"seat": 2, "is_hero": True, "stack": 200.0, "archetype": None, "hud": None,
+             "cards": ["A♠", "A♥"], "status": "active"},
+            {"seat": 3, "is_hero": False, "stack": 200.0, "archetype": None, "hud": None,
+             "cards": None, "status": "active"},
+        ],
+        "streets": {
+            "preflop": {"actions": [
+                {"seat": 1, "action": "post", "amount": 0.5},
+                {"seat": 2, "action": "post", "amount": 1.0},
+                {"seat": 3, "action": "raise", "amount": 2.5},  # a plain open, not a limp
+            ]},
+            "flop": None, "turn": None, "river": None,
+        },
+        "to_act": 2, "hero_seat": 2,
+    }
+    out = brief.compute(raw)
+    assert out["gate"] == "G1"
+    assert out["range"]["scenario"] == "vs_rfi"
+    assert out["verdict"] == "raise_or_call"
+    assert "sizing" not in out
+
+
 def test_brief_facing_a_raise_and_a_caller_squeezes_not_just_defends_vs_rfi():
     # A raise followed by a call before hero acts is a squeeze opportunity,
     # not a simple heads-up defend against the opener -- pot_type() still
