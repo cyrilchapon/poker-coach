@@ -551,6 +551,31 @@ six more issues, ranked by the report itself from most to least severe:
   `advance_street.py` runs before any narration of the street it opens, not
   after.
 
+## Live-session test report v3: findings and fixes
+
+A third real-session test surfaced a narration bug: villain actions were
+told to the player in a different order from the one actually applied to the
+engine — the amounts were right, the sequence wasn't.
+
+- **`pc apply` echoed nothing about what it had just applied.** It returned
+  only the resulting state, whose `to_act`/`to_act_position` name whoever
+  speaks *next* — so nothing in the output identified who had just acted,
+  and a mis-ordered narration could not be caught after the fact from the
+  command's own output. `cmd_apply` now adds an `applied_to` field
+  (`{"seat", "position", "action", "amount"}`) alongside the derived state,
+  taken from the same seat and amount that were appended to
+  `streets[].actions`. Absent when the action is rejected — an echo on a
+  refused call would be exactly the false confirmation the field exists to
+  prevent.
+- **Nothing in `live-session/SKILL.md` said where the speaking order comes
+  from.** Added to the anti-state-drift guardrails: villain actions are
+  narrated in the order of `streets[].actions` (or of the `applied_to`
+  echoes), never in the reading order of the ASCII render — the render is a
+  seating plan, not a sequence of speech, and an order read off it has no
+  reason to match. A divergent narrated order is a bug even when the amounts
+  are correct: the player builds their read of each profile on who opened
+  and who reacted to whom.
+
 ## Repo layout
 
 ```

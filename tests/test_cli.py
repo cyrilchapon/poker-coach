@@ -186,6 +186,52 @@ def test_cli_apply_call_computes_amount(capsys, tmp_path):
     assert last_action == {"seat": 0, "action": "call", "amount": 4.0}
 
 
+def test_cli_apply_echoes_the_seat_and_position_it_applied_to(capsys, tmp_path):
+    # Regression (live-session narration bug): cmd_apply returned only the
+    # RESULTING state, whose to_act/to_act_position name whoever speaks NEXT
+    # -- nothing in the output identified who just acted. A coach narrating
+    # villain actions therefore had no way to check its own ordering after
+    # the fact, and narrated a sequence that differed from the one actually
+    # applied to the engine.
+    p = tmp_path / "h.json"
+    p.write_text(Path(HAND).read_text())
+    code, out, err = run(["apply", "--hand", str(p), "--action", "c"], capsys)
+    assert code == 0, err
+    parsed = json.loads(out)
+    assert parsed["applied_to"] == {"seat": 0, "position": "BTN/SB",
+                                     "action": "call", "amount": 4.0}
+    # ...and it is NOT the seat now to act: that distinction is the whole point.
+    assert parsed["to_act"] != parsed["applied_to"]["seat"]
+
+
+def test_cli_apply_echo_matches_the_action_actually_written_to_hand_json(capsys, tmp_path):
+    # The echo must be derived from the same write, not recomputed loosely:
+    # a shorthand code ("a") and an engine-computed amount must come back
+    # exactly as they were appended to streets[].actions.
+    p = tmp_path / "h.json"
+    p.write_text(Path(HAND).read_text())
+    code, out, err = run(["apply", "--hand", str(p), "--action", "a"], capsys)
+    assert code == 0, err
+    echoed = json.loads(out)["applied_to"]
+    written = json.loads(p.read_text())["streets"]["flop"]["actions"][-1]
+    assert echoed["seat"] == written["seat"]
+    assert echoed["action"] == written["action"] == "allin"
+    assert echoed["amount"] == written["amount"]
+
+
+def test_cli_apply_reports_no_applied_to_when_it_rejects_the_action(capsys, tmp_path):
+    # Nothing was applied, so nothing must be echoed -- an `applied_to` on a
+    # rejected call would be exactly the false confirmation this field exists
+    # to prevent.
+    p = tmp_path / "h.json"
+    original = Path(HAND).read_text()
+    p.write_text(original)
+    code, out, err = run(["apply", "--hand", str(p), "--action", "x"], capsys)
+    assert code == 1
+    assert "applied_to" not in out
+    assert p.read_text() == original
+
+
 def test_cli_apply_rejects_check_when_facing_a_bet(capsys, tmp_path):
     # Regression: "x" (check) used to be accepted unconditionally even
     # facing seat1's flop bet (4.0), silently corrupting hand.json.
