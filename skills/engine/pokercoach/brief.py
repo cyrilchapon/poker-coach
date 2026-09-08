@@ -25,13 +25,27 @@ from typing import Any
 
 from . import actionline, budget as budget_mod, gates, handclass, sizing as sizing_mod, texture as texture_mod
 from .cards import Card
-from .equity import equity as compute_equity, parse_range
+from .equity import equity as compute_equity, equity_multiway as compute_equity_multiway, parse_range
 from .ranges import narrow as narrow_mod, table as range_table
 from .state import STREETS, HandState, StateError, derive, n_behind as derive_n_behind, validate_and_load
 
 WIDE_VILLAIN_SEED = ("22+,A2s+,K2s+,Q4s+,J6s+,T6s+,96s+,86s+,75s+,64s+,53s+,"
                      "A2o+,K8o+,Q9o+,J9o+,T9o")
 NARROW_VILLAIN_SEED = "22+,A9s+,KTs+,QTs+,JTs,T9s,98s,ATo+,KQo"
+
+# Itérations Monte-Carlo pour l'équité multiway d'un squeeze décliné
+# (_compute_preflop_squeeze_equity_section ci-dessous). Revue #7 : au défaut
+# du module (equity.DEFAULT_MULTIWAY_ITERATIONS = 20 000), ce chemin coûtait
+# ~8s par appel à ``equity_multiway`` (4 villains) -- appelé deux fois par
+# brief (wide + narrow), soit ~15-30s pour UN SEUL `pc brief` sur exactement
+# le spot que cette PR corrige (squeeze décliné, en session chronométrée).
+# Mesuré sur le repro de la revue : l'équité à 3000 itérations (0.1334) reste
+# à 0.0017 de la valeur à 20000 (0.1317), largement dans UNCERTAINTY_BAND
+# (0.04) -- aucun changement de verdict possible à cet écart, pour ~7x moins
+# de temps par appel. Ne corrige pas la racine (le filtrage de range répété
+# par itération, cf. equity.py) mais rend ce chemin utilisable en session
+# réelle sans y toucher.
+SQUEEZE_DECLINED_EQUITY_ITERATIONS = 3000
 
 
 def compute(raw: dict[str, Any], *, villain_archetype: str | None = None,
@@ -76,6 +90,7 @@ def compute(raw: dict[str, Any], *, villain_archetype: str | None = None,
             verdict_if_in_range = "raise_or_call"
             range_confidence = "high"
             range_json = None
+            raise_only = False
             hero_cards = state.seats[hero_seat].cards
             # Décision d'ouverture (RFI) : personne n'a encore volontairement
             # ouvert le pot (call/raise) — cf. actionline.is_opening_decision,
@@ -109,13 +124,33 @@ def compute(raw: dict[str, Any], *, villain_archetype: str | None = None,
                 if entry is not None:
                     range_json = entry.to_json()
                     range_confidence = entry.confidence
+                    if entry.scenario == "squeeze":
+                        # squeeze() ne représente QU'une option de relance (le
+                        # top-pct qui squeeze), jamais une range de défense
+                        # complète -- en sortir ne dit rien du call, cf.
+                        # g1_preflop_range(raise_only=...) et le bug corrigé
+                        # ci-dessous (BB J8o à 7.7:1, fold confidence=strong
+                        # sans qu'aucune équité n'ait été calculée).
+                        raise_only = True
+                        verdict_if_in_range = "raise"
                     if hero_cards and entry.range:
                         in_range = _hand_in(hero_cards, entry.range)
             out["range"] = range_json
             decision = gates.g1_preflop_range(in_range=in_range, verdict_if_in_range=verdict_if_in_range,
-                                               range_confidence=range_confidence)
+                                               range_confidence=range_confidence, raise_only=raise_only)
+        if decision is None and raise_only and in_range is False:
+            # Squeeze décliné (hors range de relance) : G1 ne tranche plus en
+            # "fold" ici (raise_only=True) -- le call reste à évaluer contre
+            # les cotes du pot, chiffré (G1B), pas supposé. Garde-fou de
+            # l'ask #3 du rapport de bug : jamais de fold préflop sans
+            # équité calculée sur un spot où le héros avait une option de
+            # squeeze.
+            n_opponents_active = max(0, d.players_active - 1)
+            equity_section, decision = _compute_preflop_squeeze_equity_section(
+                state, hero_cards, d, n_opponents_active)
+            out["equity"] = equity_section
         if decision is None:
-            # Préflop hors G0/G1 : zone grise, pas de moteur de budget préflop en v2.0.
+            # Préflop hors G0/G1/G1B : zone grise, pas de moteur de budget préflop en v2.0.
             decision = gates.g5_grey_zone(
                 escalate_reason="préflop hors plafond RFI tabulé — jugement du coach requis")
         # Régression : G1 tranchait "raise"/"raise_or_call" sans jamais
@@ -331,6 +366,46 @@ def _narrow_through_history(seed: str, state: HandState, villain_seat: int, pot_
         if street == state.street:
             break
     return current
+
+
+def _compute_preflop_squeeze_equity_section(state: HandState, hero_cards: list[Card], d,
+                                             n_opponents_active: int) -> tuple[dict[str, Any], "gates.GateDecision | None"]:
+    """Le héros a décliné le squeeze : chiffre le call restant contre
+    ``d.pot_odds`` -- multiway (tous les adversaires actifs à la fois), faute
+    d'un villain individualisé par siège à ce stade de l'architecture (les
+    scénarios dérivés de ``ranges/table.py`` n'ont qu'un seul opener/relanceur
+    de référence, pas un adversaire par siège). Comme pour
+    WIDE_VILLAIN_SEED/NARROW_VILLAIN_SEED ailleurs dans ce module, la même
+    paire de seeds génériques est prêtée à CHAQUE adversaire actif plutôt que
+    dérivée de sa position/son archétype -- approximation documentée, pas une
+    vérité figée."""
+    if hero_cards is None or d.pot_odds is None or n_opponents_active <= 0:
+        return {"note": "pas de cote à comparer -- aucune borne calculable"}, None
+
+    hero_combo = f"{hero_cards[0]}{hero_cards[1]}"
+    values: dict[str, float] = {}
+    for label, seed in (("wide", WIDE_VILLAIN_SEED), ("narrow", NARROW_VILLAIN_SEED)):
+        try:
+            values[label] = compute_equity_multiway(hero_combo, [seed] * n_opponents_active,
+                                                      iterations=SQUEEZE_DECLINED_EQUITY_ITERATIONS)
+        except ValueError:
+            continue  # range vide une fois les conflits de cartes retirés -> exclue plutôt que de planter
+
+    if not values:
+        return {
+            "vs_range_wide": WIDE_VILLAIN_SEED, "vs_range_narrow": NARROW_VILLAIN_SEED,
+            "note": "ranges vides une fois les conflits de cartes retirés — aucune borne calculable",
+        }, None
+
+    lower, upper = min(values.values()), max(values.values())
+    section = {
+        "vs_range_wide": WIDE_VILLAIN_SEED, "vs_range_narrow": NARROW_VILLAIN_SEED,
+        "lower_bound": round(lower, 4), "upper_bound": round(upper, 4),
+        "threshold": round(d.pot_odds, 4), "method": "monte_carlo_multiway",
+        "n_villains": n_opponents_active,
+    }
+    g1b = gates.g1b_squeeze_declined_pot_odds(lower_bound=lower, upper_bound=upper, threshold=d.pot_odds)
+    return section, g1b
 
 
 def _compute_equity_section(state: HandState, hero_cards: list[Card], d, pot_type: str,

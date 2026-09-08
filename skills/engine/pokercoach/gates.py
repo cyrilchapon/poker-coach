@@ -15,10 +15,11 @@ from dataclasses import dataclass
 # du même côté -> verdict forcé. Dedans -> escalade G5.
 UNCERTAINTY_BAND = 0.04
 
-GATES = ("G0", "G1", "G2", "G3", "G4", "G5")
+GATES = ("G0", "G1", "G1B", "G2", "G3", "G4", "G5")
 VERBOSITY_BY_GATE = {
-    "G0": "one_line", "G1": "verdict_plus_reason", "G2": "verdict_plus_reason",
-    "G3": "verdict_plus_number", "G4": "verdict_plus_exploit_reason", "G5": "full",
+    "G0": "one_line", "G1": "verdict_plus_reason", "G1B": "verdict_plus_number",
+    "G2": "verdict_plus_reason", "G3": "verdict_plus_number",
+    "G4": "verdict_plus_exploit_reason", "G5": "full",
 }
 
 
@@ -44,7 +45,7 @@ def g0_forced(*, hero_is_allin: bool, only_action: str | None) -> GateDecision |
 
 
 def g1_preflop_range(*, in_range: bool | None, verdict_if_in_range: str = "raise_or_call",
-                      range_confidence: str = "high") -> GateDecision | None:
+                      range_confidence: str = "high", raise_only: bool = False) -> GateDecision | None:
     """``verdict_if_in_range`` : "raise_or_call" pour une range simple, ou
     "raise"/"limp" pour un scénario à stratégie mixte (SB vs BB) où
     l'appelant a déjà déterminé dans quel bucket tombe la main du héros.
@@ -60,13 +61,46 @@ def g1_preflop_range(*, in_range: bool | None, verdict_if_in_range: str = "raise
     épistémique dans le JSON de sortie, alors que ``range.confidence`` disait
     déjà "extrapolated" à côté. Propager cette confiance ici (au lieu de la
     coder en dur) retire le caractère trompeur, dans l'esprit exact du
-    correctif déjà appliqué à G2 ci-dessous."""
+    correctif déjà appliqué à G2 ci-dessous.
+
+    ``raise_only`` : ``in_range`` vient d'une range qui ne représente QU'une
+    option de relance (aujourd'hui : ``squeeze()``, cf. ``ranges/table.py``)
+    -- pas une range de défense complète (call+raise confondus, comme
+    vs_rfi/vs_limp/vs_3bet/vs_4bet). Bug corrigé : hors de cette range, G1
+    rendait ``fold`` alors que "pas la main pour squeezer" ne dit RIEN du
+    call, jamais évalué (repro : BB J8o à 7.7:1 dans un pot squeeze,
+    fold confidence=strong sans qu'aucune équité n'ait été calculée). Avec
+    ``raise_only=True``, sortir de la range renvoie ``None`` (pas de
+    verdict) au lieu de "fold" -- à charge de l'appelant d'évaluer le call
+    (cf. brief._compute_preflop_squeeze_equity_section / gate G1B)."""
     if in_range is None:
         return None
     confidence = "forced" if range_confidence == "high" else "strong"
     if in_range:
         return GateDecision(gate="G1", verdict=verdict_if_in_range, confidence=confidence)
+    if raise_only:
+        return None
     return GateDecision(gate="G1", verdict="fold", confidence=confidence)
+
+
+def g1b_squeeze_declined_pot_odds(*, lower_bound: float, upper_bound: float,
+                                   threshold: float) -> GateDecision | None:
+    """Le héros a décliné le squeeze (main hors de la range de relance de
+    ``squeeze()``, cf. ``g1_preflop_range(..., raise_only=True)``) mais reste
+    à agir : ceci tranche le CALL restant contre les cotes du pot, jamais un
+    simple négatif de G1. Garde-fou de l'ask #3 du rapport de bug : aucun
+    ``fold`` ne peut sortir d'un spot squeeze sans qu'une équité ait
+    effectivement été chiffrée contre ``threshold`` -- ce gate EST ce calcul,
+    câblé plutôt que laissé à une consigne en prose dans une skill.
+
+    Même bande d'incertitude que G3 (``UNCERTAINTY_BAND``), verdicts
+    différents ("call"/"fold", jamais "call_or_raise" -- la relance est déjà
+    écartée en amont par G1)."""
+    if lower_bound >= threshold + UNCERTAINTY_BAND and upper_bound >= threshold + UNCERTAINTY_BAND:
+        return GateDecision(gate="G1B", verdict="call", confidence="strong")
+    if lower_bound <= threshold - UNCERTAINTY_BAND and upper_bound <= threshold - UNCERTAINTY_BAND:
+        return GateDecision(gate="G1B", verdict="fold", confidence="strong")
+    return None  # le seuil retombe dans la bande -> escalade G5
 
 
 def g2_budget_decisive(*, envisaged_action: str, viable_actions: list[str],

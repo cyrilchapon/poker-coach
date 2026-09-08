@@ -287,3 +287,97 @@ def _monte_carlo_equity(pairs, board, remaining_deck, n_missing, iterations) -> 
         range1_equity=r1_w / total_w, range2_equity=r2_w / total_w,
         method="monte_carlo", iterations=iterations, combos_used=len(pairs),
     )
+
+
+# --- Équité multiway (héros vs N ranges adverses simultanément) ---------
+#
+# Ajoutée pour ``pc brief`` préflop : ``equity()`` ci-dessus ne compare que
+# deux ranges, ce qui suffit pour le hero-vs-most-relevant-villain postflop
+# mais pas pour un spot où le héros affronte plusieurs adversaires actifs à
+# la fois (squeeze décliné, cold-call multiway, ...). Toujours Monte-Carlo :
+# l'énumération exhaustive à N villains explose combinatoirement bien avant
+# le budget qui suffit à la version à deux ranges.
+
+DEFAULT_MULTIWAY_ITERATIONS = 20_000
+
+
+def equity_multiway(hero_range_str: str, villain_ranges: list[str], *, board: list[Card] = (),
+                     dead: list[Card] = (), iterations: int = DEFAULT_MULTIWAY_ITERATIONS) -> float:
+    """Équité de ``hero_range_str`` (typiquement une main exacte, ex.
+    ``"J♥8♦"``, mais toute range est acceptée) contre ``villain_ranges``
+    (une range par adversaire actif) simultanément, sur ``board`` (préflop
+    par défaut). Retourne juste l'équité du héros (0..1) -- pas de pendant
+    par-villain, aucun appelant actuel n'en a besoin."""
+    board_key = tuple(sorted((c.rank, c.suit) for c in board))
+    dead_key = tuple(sorted((c.rank, c.suit) for c in dead))
+    return _equity_multiway_cached(hero_range_str, tuple(villain_ranges), board_key, dead_key, iterations)
+
+
+@lru_cache(maxsize=2048)
+def _equity_multiway_cached(hero_range_str: str, villain_ranges: tuple[str, ...], board_key: tuple,
+                             dead_key: tuple, iterations: int) -> float:
+    board = [Card(r, s) for r, s in board_key]
+    dead = set(Card(r, s) for r, s in dead_key) | set(board)
+
+    hero_combos = [wc for wc in parse_range(hero_range_str) if not (set(wc.combo) & dead)]
+    if not hero_combos:
+        raise ValueError("range du héros vide une fois les cartes mortes/board retirées")
+    villain_combo_lists = []
+    for i, vr in enumerate(villain_ranges):
+        combos = [wc for wc in parse_range(vr) if not (set(wc.combo) & dead)]
+        if not combos:
+            raise ValueError(f"range villain #{i} vide une fois les cartes mortes/board retirées")
+        villain_combo_lists.append(combos)
+
+    hero_weights = [wc.weight for wc in hero_combos]
+    hero_cum_weights = list(itertools.accumulate(hero_weights))
+    villain_cum_weights = [list(itertools.accumulate(wc.weight for wc in combos))
+                            for combos in villain_combo_lists]
+
+    remaining_deck_base = [c for c in FULL_DECK if c not in dead]
+    n_missing = 5 - len(board)
+    rng = random.Random(7654321)  # déterministe, seed distinct de _monte_carlo_equity
+
+    total = 0.0
+    hero_w = 0.0
+    for _ in range(iterations):
+        used = set()
+        hero_hand = rng.choices(hero_combos, cum_weights=hero_cum_weights, k=1)[0]
+        used |= set(hero_hand.combo)
+
+        villain_hands = []
+        conflict = False
+        for combos, cum_weights in zip(villain_combo_lists, villain_cum_weights):
+            available = [(wc, w) for wc, w in zip(combos, cum_weights) if not (set(wc.combo) & used)]
+            if not available:
+                # Range épuisée par les conflits de cartes déjà tirées --
+                # ce tirage est ignoré plutôt que de fausser l'équité en
+                # forçant un villain sur une main impossible.
+                conflict = True
+                break
+            avail_combos = [wc for wc, _ in available]
+            # cum_weights recalculés localement (available a déjà retiré des
+            # entrées) -- ce sous-ensemble est petit (une poignée de combos
+            # au pire), le coût est négligeable face à l'itération globale.
+            local_cum = list(itertools.accumulate(wc.weight for wc in avail_combos))
+            villain_hand = rng.choices(avail_combos, cum_weights=local_cum, k=1)[0]
+            villain_hands.append(villain_hand)
+            used |= set(villain_hand.combo)
+        if conflict:
+            continue
+
+        pool = [c for c in remaining_deck_base if c not in used]
+        extra = rng.sample(pool, n_missing) if n_missing else []
+        full_board = list(board) + extra
+
+        hero_score = evaluate(list(hero_hand.combo) + full_board)
+        villain_scores = [evaluate(list(v.combo) + full_board) for v in villain_hands]
+        best = max([hero_score] + villain_scores)
+        total += 1.0
+        if hero_score == best:
+            n_winners = 1 + sum(1 for s in villain_scores if s == best)
+            hero_w += 1.0 / n_winners
+
+    if total == 0:
+        raise ValueError("aucun tirage valide -- ranges en conflit total sur toutes les itérations")
+    return hero_w / total

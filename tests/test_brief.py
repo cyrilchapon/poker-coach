@@ -534,6 +534,40 @@ def test_brief_g3_bounds_are_not_degenerate_after_heavy_multi_street_pressure():
     assert eq["upper_bound"] > eq["lower_bound"] >= 0.0
 
 
+def test_brief_squeeze_declined_never_folds_strong_without_computing_equity():
+    # Regression (bug report): BB with J8o closing the action at 7.7:1 in a
+    # 5-way squeeze pot (UTG LAG opens, three Fish call). The squeeze()
+    # range (top 4.1%) never contains J8o, but that only says "don't
+    # squeeze" -- it says nothing about the call, which used to fall
+    # straight through G1 as "fold"/"strong" without ever comparing equity
+    # to pot odds. Exact repro fixture attached to the bug report -- the
+    # expected result is not necessarily "call", but it must never be
+    # "fold" with confidence "strong" on an unevaluated decision.
+    raw = load_fixture("squeeze_bb_j8o_repro.json")
+    out = brief.compute(raw, villain_archetype="fish")
+    assert out["range"]["scenario"] == "squeeze"
+    assert not (out["verdict"] == "fold" and out["confidence"] == "strong")
+    # The call was never even considered before this fix -- now it must be,
+    # whichever gate ends up deciding (G1B outright, or G5 if the computed
+    # bounds straddle the uncertainty band around the threshold).
+    assert out["gate"] in ("G1B", "G5")
+    assert "equity" in out
+    assert out["equity"]["threshold"] == pytest.approx(out["state"]["pot_odds"])
+
+
+def test_brief_squeeze_in_range_still_raises():
+    # The in-range side of squeeze must keep deciding "raise" directly (G1,
+    # not deferred) -- only the out-of-range side changed.
+    raw = load_fixture("squeeze_bb_j8o_repro.json")
+    raw = dict(raw)
+    raw["seats"] = [dict(s) for s in raw["seats"]]
+    raw["seats"][0]["cards"] = ["A♠", "A♥"]  # comfortably inside the squeeze range
+    out = brief.compute(raw)
+    assert out["gate"] == "G1"
+    assert out["range"]["scenario"] == "squeeze"
+    assert out["verdict"] == "raise"
+
+
 def test_brief_never_crashes_on_river():
     raw = load_fixture("hu_flop_cbet.json")
     raw = dict(raw)

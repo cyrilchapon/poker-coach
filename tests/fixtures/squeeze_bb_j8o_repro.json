@@ -1,0 +1,141 @@
+{
+  "schema_version": "2.0",
+  "session_id": "repro-brief-squeeze",
+  "hand_id": 1,
+  "table": {
+    "format": "6max",
+    "big_blind": 1.0,
+    "ante": 0.0,
+    "button_seat": 4
+  },
+  "seats": [
+    {
+      "seat": 0,
+      "is_hero": true,
+      "stack": 100.0,
+      "archetype": null,
+      "hud": null,
+      "cards": [
+        "J♥",
+        "8♦"
+      ],
+      "status": "active"
+    },
+    {
+      "seat": 1,
+      "is_hero": false,
+      "stack": 100.0,
+      "archetype": "lag",
+      "hud": {
+        "vpip": 28,
+        "pfr": 23,
+        "three_bet": 11,
+        "af": 4.1
+      },
+      "cards": null,
+      "status": "active"
+    },
+    {
+      "seat": 2,
+      "is_hero": false,
+      "stack": 100.0,
+      "archetype": "fish",
+      "hud": {
+        "vpip": 44,
+        "pfr": 4,
+        "three_bet": 1,
+        "af": 0.4
+      },
+      "cards": null,
+      "status": "active"
+    },
+    {
+      "seat": 3,
+      "is_hero": false,
+      "stack": 100.0,
+      "archetype": "fish",
+      "hud": {
+        "vpip": 47,
+        "pfr": 6,
+        "three_bet": 1,
+        "af": 1.1
+      },
+      "cards": null,
+      "status": "active"
+    },
+    {
+      "seat": 4,
+      "is_hero": false,
+      "stack": 100.0,
+      "archetype": "fish",
+      "hud": {
+        "vpip": 44,
+        "pfr": 5,
+        "three_bet": 2,
+        "af": 1.0
+      },
+      "cards": null,
+      "status": "active"
+    },
+    {
+      "seat": 5,
+      "is_hero": false,
+      "stack": 100.0,
+      "archetype": "tag",
+      "hud": {
+        "vpip": 18,
+        "pfr": 18,
+        "three_bet": 8,
+        "af": 2.7
+      },
+      "cards": null,
+      "status": "folded"
+    }
+  ],
+  "streets": {
+    "preflop": {
+      "actions": [
+        {
+          "seat": 5,
+          "action": "post",
+          "amount": 0.5
+        },
+        {
+          "seat": 0,
+          "action": "post",
+          "amount": 1.0
+        },
+        {
+          "seat": 1,
+          "action": "raise",
+          "amount": 2.5
+        },
+        {
+          "seat": 2,
+          "action": "call",
+          "amount": 2.5
+        },
+        {
+          "seat": 3,
+          "action": "call",
+          "amount": 2.5
+        },
+        {
+          "seat": 4,
+          "action": "call",
+          "amount": 2.5
+        },
+        {
+          "seat": 5,
+          "action": "fold",
+          "amount": 0.5
+        }
+      ]
+    },
+    "flop": null,
+    "turn": null,
+    "river": null
+  },
+  "to_act": 0,
+  "hero_seat": 0
+}
