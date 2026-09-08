@@ -1,0 +1,37 @@
+{
+  "schema_version": "2.0",
+  "session_id": "s-test-order",
+  "hand_id": 1,
+
+  "table": { "big_blind": 1.0, "ante": 0.0, "button_seat": 0 },
+
+  "seats": [
+    { "seat": 0, "is_hero": false, "stack": 100.0, "archetype": "tag", "hud": null,
+      "cards": null, "status": "active" },
+    { "seat": 1, "is_hero": false, "stack": 100.0, "archetype": "lag", "hud": null,
+      "cards": null, "status": "active" },
+    { "seat": 2, "is_hero": true, "stack": 100.0, "archetype": null, "hud": null,
+      "cards": ["A♠", "K♦"], "status": "active" },
+    { "seat": 3, "is_hero": false, "stack": 100.0, "archetype": "nit", "hud": null,
+      "cards": null, "status": "active" },
+    { "seat": 4, "is_hero": false, "stack": 0.0, "archetype": "fish", "hud": null,
+      "cards": null, "status": "out" },
+    { "seat": 5, "is_hero": false, "stack": 100.0, "archetype": "maniac", "hud": null,
+      "cards": null, "status": "active" }
+  ],
+
+  "streets": {
+    "preflop": {
+      "actions": [
+        { "seat": 1, "action": "post", "amount": 0.5 },
+        { "seat": 2, "action": "post", "amount": 1.0 }
+      ]
+    },
+    "flop": null,
+    "turn": null,
+    "river": null
+  },
+
+  "to_act": 2,
+  "hero_seat": 2
+}
