@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from pokercoach.cli import main
+from pokercoach.render import BB_UNIT
 
 FIXTURES = Path(__file__).parent / "fixtures"
 HAND = str(FIXTURES / "hu_flop_cbet.json")
@@ -256,9 +257,11 @@ def test_cli_render_shows_remaining_stack_not_the_stale_starting_stack(capsys):
         # (state.py's own convention) -- both seats end this flop having
         # put in 3.0 (preflop, already the total after their raise/call)
         # + 4.0 (flop) = 7.0, so 100 - 7.0 = 93.0 each. Was stuck at the
-        # stale starting stack (100.0) before the fix.
-        assert ascii_art.count("93.0") == 2
-        assert "100.0" not in ascii_art
+        # stale starting stack (100.0) before the fix. render() drops the
+        # superfluous ".0" on whole amounts (cf. render.py docstring), so
+        # the rendered stack reads "93𝄫", not "93.0𝄫".
+        assert ascii_art.count("93" + BB_UNIT) == 2
+        assert "100" + BB_UNIT not in ascii_art
     finally:
         p.unlink()
 
