@@ -5,9 +5,9 @@ from pathlib import Path
 import pytest
 
 from pokercoach.state import (
-    StateError, derive, hero_closes_action, ip_postflop, n_behind, players_to_act_behind,
-    position_labels, postflop_acting_order_offsets, preflop_acting_order_offsets,
-    seats_still_to_act, validate_and_load,
+    StateError, derive, hero_closes_action, ip_postflop, is_runout, n_behind,
+    no_decision_left, players_to_act_behind, position_labels, postflop_acting_order_offsets,
+    preflop_acting_order_offsets, seats_still_to_act, to_call, validate_and_load,
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -464,3 +464,117 @@ def test_players_to_act_behind_is_published_by_derive():
     d = derive(state).to_json()
     assert d["players_to_act_behind"] == 0
     assert d["hero_closes_action"] is True
+
+
+# --- runout (all-in callé) -------------------------------------------------
+
+RUNOUT = "hu_flop_allin_called_runout.json"
+
+
+def test_a_called_allin_is_a_valid_state_with_to_act_null():
+    # Regression (revue live-session) : un all-in callé n'avait AUCUNE
+    # représentation valide. Plus aucun siège n'était "active", donc tout
+    # `to_act` entier était refusé ("n'est pas 'active'") -- et `null`
+    # l'était aussi ("to_act invalide"). `pc render`, `pc assert-state` et
+    # `pc showdown --from-hand` rejetaient donc l'état, et le seul
+    # contournement en session était de remettre des statuts à la main dans
+    # hand.json : exactement ce que les garde-fous anti-dérive interdisent.
+    state = validate_and_load(load_fixture(RUNOUT))
+    assert state.to_act is None
+    assert is_runout(state) is True
+
+
+def test_derive_on_a_runout_reports_no_seat_to_act_and_nothing_to_call():
+    d = derive(validate_and_load(load_fixture(RUNOUT)))
+    assert d.runout is True
+    assert d.to_act is None and d.to_act_position is None
+    # Personne ne peut agir -> personne n'a rien à suivre. Sans la garde dans
+    # `to_call`, le siège `None` ne correspondait à aucune action de la rue :
+    # sa contribution tombait à 0 et `to_call` renvoyait la mise maximale,
+    # un montant "à suivre" entièrement fictif.
+    assert d.to_call == pytest.approx(0.0)
+    assert d.pot_odds is None and d.mdf_collective is None
+    # `players_to_act_behind == 0` se lirait "c'est au héros de conclure la
+    # rue" -- l'inverse de la réalité, puisqu'il n'y a plus d'action du tout.
+    assert d.hero_closes_action is False
+    assert d.players_active == 2
+
+
+def test_to_act_null_is_refused_while_a_seat_can_still_act():
+    raw = load_fixture(RUNOUT)
+    raw["seats"][1]["status"] = "active"
+    raw["streets"]["flop"]["actions"] = raw["streets"]["flop"]["actions"][:2]
+    with pytest.raises(StateError, match="to_act invalide"):
+        validate_and_load(raw)
+
+
+def test_to_act_pointing_at_an_allin_seat_still_fails_but_now_names_the_runout():
+    # L'erreur reste une erreur (jamais de correction silencieuse), mais elle
+    # dit quoi écrire à la place -- c'est le seul indice qu'avait la session
+    # pour ne PAS partir retoucher les statuts à la main.
+    raw = load_fixture(RUNOUT)
+    raw["to_act"] = 1
+    with pytest.raises(StateError, match="runout"):
+        validate_and_load(raw)
+
+
+def test_a_lone_active_seat_facing_matched_allins_is_a_runout_too():
+    # Deuxième forme du runout, celle qu'on rate : le payeur le plus profond
+    # d'un tapis reste "active" (il n'a pas fait tapis lui-même), donc
+    # `to_act` pointe encore sur lui -- alors qu'il ne peut ni suivre (rien à
+    # suivre) ni miser (personne pour payer).
+    raw = load_fixture(RUNOUT)
+    raw["seats"][0]["stack"] = 200.0
+    raw["seats"][0]["status"] = "active"
+    raw["streets"]["flop"]["actions"] = [
+        {"seat": 1, "action": "bet", "amount": 4.0},
+        {"seat": 1, "action": "allin", "amount": 97.0},
+        {"seat": 0, "action": "call", "amount": 97.0},
+    ]
+    raw["to_act"] = 0
+    state = validate_and_load(raw)
+    assert state.to_act == 0
+    assert to_call(state) == pytest.approx(0.0)
+    assert is_runout(state) is True
+    assert hero_closes_action(state) is False
+
+
+def test_a_hand_everyone_folded_to_is_not_a_runout():
+    # Même absence de siège actif, mais un seul siège en lice : le pot est
+    # déjà attribué, il n'y a pas de board à dérouler ni d'abattage. Les deux
+    # états terminaux sont valides, mais ce ne sont pas les mêmes -- c'est
+    # `is_runout` qui les sépare, et advance_street/showdown qui refusent
+    # celui-ci.
+    raw = load_fixture(RUNOUT)
+    raw["seats"][1]["status"] = "folded"
+    raw["streets"]["flop"]["actions"][-1] = {"seat": 1, "action": "fold", "amount": 4.0}
+    state = validate_and_load(raw)
+    assert state.to_act is None
+    assert is_runout(state) is False
+
+
+def test_no_decision_left_sends_a_runout_and_a_decided_hand_to_different_next_steps():
+    # Revue de PR : les trois gardes (`pc apply`, `pc budget`, `pc brief`)
+    # avaient chacune recopié `is_runout(state) or state.to_act is None` et
+    # renvoyaient donc "runout, dérouler le board" dans les DEUX cas -- y
+    # compris sur un tapis que tout le monde a couché, où il n'y a ni rue à
+    # ouvrir ni abattage. L'utilisateur qui suivait le conseil se faisait
+    # rattraper par advance_street.py ("la main est déjà décidée"), un détour
+    # évitable. La distinction vit maintenant à un seul endroit.
+    runout = validate_and_load(load_fixture(RUNOUT))
+    assert "runout" in no_decision_left(runout)
+    assert "advance_street.py" in no_decision_left(runout)
+
+    raw = load_fixture(RUNOUT)
+    raw["seats"][1]["status"] = "folded"
+    raw["streets"]["flop"]["actions"][-1] = {"seat": 1, "action": "fold", "amount": 4.0}
+    decided = validate_and_load(raw)
+    message = no_decision_left(decided)
+    assert "déjà décidée" in message
+    # Le piège : surtout PAS renvoyer vers les outils du runout, qui
+    # refuseront tous les deux.
+    assert "advance_street.py" not in message and "showdown" not in message
+
+
+def test_no_decision_left_returns_none_while_a_decision_remains():
+    assert no_decision_left(validate_and_load(load_fixture("hu_flop_cbet.json"))) is None

@@ -27,7 +27,8 @@ from . import actionline, budget as budget_mod, gates, handclass, sizing as sizi
 from .cards import Card
 from .equity import equity as compute_equity, equity_multiway as compute_equity_multiway, parse_range
 from .ranges import narrow as narrow_mod, table as range_table
-from .state import (STREETS, HandState, StateError, derive, n_behind as derive_n_behind,
+from .state import (STREETS, HandState, StateError, derive,
+                     n_behind as derive_n_behind, no_decision_left,
                      players_to_act_behind as derive_players_to_act_behind, validate_and_load)
 
 WIDE_VILLAIN_SEED = ("22+,A2s+,K2s+,Q4s+,J6s+,T6s+,96s+,86s+,75s+,64s+,53s+,"
@@ -354,6 +355,16 @@ def _require_hero_to_act(state: HandState) -> None:
     l'un, tantôt l'autre, produisant un brief incohérent -- cartes du héros
     mélangées avec le pot/to_call/budget de qui que ce soit d'autre -- si
     jamais un appelant calculait un brief hors du tour du héros)."""
+    # `no_decision_left` couvre aussi le cas où le héros est resté ACTIVE :
+    # payeur le plus profond d'un tapis, il ne peut ni suivre (rien à suivre)
+    # ni miser (personne pour payer) -- `to_act` pointe pourtant encore sur
+    # lui, et sans cette garde `pc brief` déroulait ses gates jusqu'à un
+    # verdict sur une décision qui n'existe pas.
+    no_decision = no_decision_left(state)
+    if no_decision is not None:
+        raise StateError(
+            f"pc brief conseille une décision, or il n'y en a plus à prendre : {no_decision}"
+        )
     if state.to_act != state.hero_seat:
         raise StateError(
             f"pc brief ne peut conseiller que la décision du héros : to_act (siège {state.to_act}) "

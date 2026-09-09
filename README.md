@@ -258,7 +258,8 @@ each):
 - [`skills/live-session/scripts/advance_street.py`](skills/live-session/scripts/advance_street.py) —
   opens the next street once the current one's action is closed (rejects
   otherwise), deals the new cards, and sets `to_act` per the postflop
-  order (`pokercoach.state.postflop_acting_order_offsets`, added for this).
+  order (`pokercoach.state.postflop_acting_order_offsets`, added for this)
+  — or to `null` on a runout, where a called all-in leaves nobody to act.
 - [`skills/live-session/scripts/new_hand.py`](skills/live-session/scripts/new_hand.py) —
   rotates the button, carries stacks/archetypes forward by physical seat,
   posts blinds, and refuses outright (rather than silently misbehaving) if
@@ -550,6 +551,63 @@ six more issues, ranked by the report itself from most to least severe:
   now states the rule explicitly — no hand-written table renders, ever, and
   `advance_street.py` runs before any narration of the street it opens, not
   after.
+
+## Live-session test report v3: findings and fixes
+
+A third real-session test surfaced a narration bug (villain actions told to
+the player in a different order from the one actually applied to the engine —
+the amounts were right, the sequence wasn't) and a hard blocker (a called
+all-in could not be run out at all).
+
+- **`pc apply` echoed nothing about what it had just applied.** It returned
+  only the resulting state, whose `to_act`/`to_act_position` name whoever
+  speaks *next* — so nothing in the output identified who had just acted,
+  and a mis-ordered narration could not be caught after the fact from the
+  command's own output. `cmd_apply` now adds an `applied_to` field
+  (`{"seat", "position", "action", "amount"}`) alongside the derived state,
+  taken from the same seat and amount that were appended to
+  `streets[].actions`. Absent when the action is rejected — an echo on a
+  refused call would be exactly the false confirmation the field exists to
+  prevent.
+- **A called all-in had no valid state at all — two blockers in cascade.**
+  `advance_street.py` rejected any street with no actions (`aucune action
+  enregistrée — rien à clore`), which is precisely the normal shape of a
+  runout: nobody has a decision left to take. And once every contesting seat
+  was all-in, `to_act` could no longer point at an `active` seat, while
+  `to_act: null` was rejected too — so `pc render`, `pc assert-state` and
+  `pc showdown --from-hand` all refused the state. The only way through, in
+  session, was to hand-edit `hand.json` (statuses back to `active`, street
+  node written by hand), which is exactly what the skill's anti-state-drift
+  guardrails forbid. Fixed on both sides: `to_act: null` is now a validated
+  terminal state (accepted whenever no seat is `active`), and closure is
+  decided by "is there a decision left to take?" rather than "does the street
+  have actions?" — an unmatched bet still blocks, a lone active seat with
+  nothing to call does not. `state.is_runout()` derives the condition (never
+  stored — a `runout: true` field in `hand.json` would be a second source of
+  truth free to contradict `seats[].status`) and covers the form that's easy
+  to miss: the deepest caller who is still `active` yet can neither call
+  (nothing to call) nor bet (nobody left to pay). `pc state`/`pc render`/
+  `pc assert-state` expose it as `runout`; `pc apply`, `pc brief` and
+  `pc budget` refuse a runout instead of advising a decision that doesn't
+  exist — through a single `state.no_decision_left()`, which names *which*
+  terminal state it is and where to go next. Those three guards had each
+  copied the condition and collapsed both cases into "runout, deal the board
+  out", so a shove everyone folded to sent the caller to `advance_street.py`,
+  which then refused it with the correct message: a detour, on a change whose
+  own argument is error messages that say what to do next. `pc apply` also writes `to_act: null` itself now — it previously
+  left `to_act` on the seat that had just shoved, so applying the call that
+  ends the betting failed and wrote nothing.
+- **Nothing in `live-session/SKILL.md` said where the speaking order comes
+  from.** Added to the anti-state-drift guardrails: villain actions are
+  narrated in the order of `streets[].actions` (or of the `applied_to`
+  echoes), never in the reading order of the ASCII render — the render is a
+  seating plan, not a sequence of speech, and an order read off it has no
+  reason to match. A divergent narrated order is a bug even when the amounts
+  are correct: the player builds their read of each profile on who opened
+  and who reacted to whom. Added alongside it: never hand-edit `hand.json` to
+  get past a script that refuses (the workaround the runout blocker forced),
+  except in the cases `new_hand.py` names as out of its own scope; and a
+  "Runout" section covering how a called all-in is dealt out.
 
 ## Repo layout
 

@@ -29,6 +29,9 @@ Sous-commandes :
     pc showdown --board B --hand NAME:C1,C2 [--hand NAME:C1,C2 ...]   (calculatrice libre)
     pc glossary <terme>
     pc apply    --hand hand.json --action "b 5.5"  applique une action, réécrit l'état
+                renvoie l'état résultant + `applied_to` (siège, position, action, montant
+                auxquels l'action vient d'être appliquée) -- l'état seul ne dit que qui
+                parle ENSUITE, jamais qui vient de parler
     pc assert-state --hand hand.json [--street S] [--board ...] [--to-act N]
                 vérifie que l'état réel correspond à ce que le coach CROIT être vrai --
                 échoue bruyamment (code non nul) en cas de dérive, plutôt que de laisser
@@ -50,8 +53,8 @@ from . import render as render_mod, showdown as showdown_mod, sizing as sizing_m
 from .cards import Card, CardError, parse_card, parse_cards
 from .equity import equity as compute_equity
 from .state import (
-    STREETS, StateError, derive, n_behind as derive_n_behind_state, position_labels, remaining_stack,
-    validate_and_load,
+    STREETS, StateError, derive, is_runout, n_behind as derive_n_behind_state, no_decision_left,
+    position_labels, remaining_stack, validate_and_load,
 )
 
 
@@ -95,6 +98,11 @@ def cmd_line(args: argparse.Namespace) -> dict[str, Any]:
 
 def cmd_budget(args: argparse.Namespace) -> dict[str, Any]:
     state = _load_state(args.hand)
+    no_decision = no_decision_left(state)
+    if no_decision is not None:
+        raise StateError(
+            f"pc budget évalue une décision à prendre, or il n'y en a plus : {no_decision}"
+        )
     # Régression : lisait les cartes du siège au trait (`to_act`) mais la
     # pression de ce même `to_act` -- cohérent entre les deux, mais divergent
     # de `cmd_hand` (qui utilise `hero_seat` par défaut) si jamais `pc budget`
@@ -634,9 +642,16 @@ def cmd_apply(args: argparse.Namespace) -> dict[str, Any]:
     if action not in _SHORTHAND.values():
         raise StateError(f'action inconnue : {code!r} (attendu f/x/c/b/r/a ou leur forme longue)')
 
-    already_in = street_contribution(state, state.street, state.to_act)
+    # Écarte du même coup `to_act is None` : ce cas est toujours l'un des deux
+    # états terminaux, donc `acting_seat` est un siège réel en dessous.
+    no_decision = no_decision_left(state)
+    if no_decision is not None:
+        raise StateError(f"aucune action légale : {no_decision}")
+    acting_seat = state.to_act
+    acting_position = position_labels(state)[acting_seat]
+    already_in = street_contribution(state, state.street, acting_seat)
     to_call_amt = compute_to_call(state)
-    stack_cap = remaining_stack(state, state.to_act)
+    stack_cap = remaining_stack(state, acting_seat)
 
     if len(parts) > 1:
         amount = float(parts[1])
@@ -653,23 +668,43 @@ def cmd_apply(args: argparse.Namespace) -> dict[str, Any]:
                             to_call_amt=to_call_amt, stack_cap=stack_cap)
 
     node = raw["streets"][state.street]
-    node["actions"].append({"seat": state.to_act, "action": action, "amount": amount})
+    node["actions"].append({"seat": acting_seat, "action": action, "amount": amount})
 
     if action == "fold":
-        raw["seats"][state.to_act]["status"] = "folded"
+        raw["seats"][acting_seat]["status"] = "folded"
     elif action == "allin":
-        raw["seats"][state.to_act]["status"] = "allin"
+        raw["seats"][acting_seat]["status"] = "allin"
     n = state.n_seats
-    order = [(state.to_act + i) % n for i in range(1, n + 1)]
-    next_seat = next((s for s in order if raw["seats"][s]["status"] == "active"), None)
-    if next_seat is not None:
-        raw["to_act"] = next_seat
+    order = [(acting_seat + i) % n for i in range(1, n + 1)]
+    # ``None`` quand plus aucun siège ne peut agir : all-in callé (runout,
+    # cf. ``state.is_runout``) ou tapis que tout le monde a couché. L'ancien
+    # `if next_seat is not None` laissait alors `to_act` pointer sur le siège
+    # qui venait de faire tapis ou de se coucher — un état que
+    # `validate_and_load` refuse (« to_act n'est pas 'active' »), donc un
+    # `pc apply` qui échouait SANS écrire le call all-in qu'on venait de lui
+    # demander d'appliquer.
+    raw["to_act"] = next((s for s in order if raw["seats"][s]["status"] == "active"), None)
 
     # Valider AVANT d'écrire : si le nouvel état est incohérent, l'erreur
     # remonte sans qu'aucun octet n'ait touché le disque. Écriture atomique
     # (fichier temporaire + os.replace) pour ne jamais laisser un fichier
     # tronqué en cas d'interruption pendant l'écriture elle-même.
     result = derive(validate_and_load(raw)).to_json()
+    # Écho de l'action qui vient d'être appliquée -- l'état résultant seul ne
+    # dit QUE qui parle ensuite, jamais qui vient de parler. Sans ce champ,
+    # rien dans la sortie de `pc apply` ne permet de vérifier après coup
+    # l'ordre réel des actions adverses : c'est ce trou qui a laissé passer
+    # une narration de session dans un ordre différent de celui réellement
+    # appliqué au moteur (le coach relisant l'ordre du rendu ASCII -- un plan
+    # de table -- au lieu de la séquence de parole). Siège ET label de
+    # position, parce que le siège seul ne se relit pas et que le label seul
+    # est dérivé (il tourne avec `button_seat` d'une main à l'autre).
+    result["applied_to"] = {
+        "seat": acting_seat,
+        "position": acting_position,
+        "action": action,
+        "amount": round(amount, 4),
+    }
 
     import os
     import tempfile
@@ -744,6 +779,10 @@ def cmd_assert_state(args: argparse.Namespace) -> dict[str, Any]:
         "street": state.street,
         "board": [str(c) for c in state.board],
         "to_act": state.to_act,
+        # `to_act: null` seul se lit aussi bien « personne ne parle » que
+        # « champ absent » -- le booléen dit lequel des deux (cf.
+        # `DerivedState.to_json`).
+        "runout": is_runout(state),
     }
 
 

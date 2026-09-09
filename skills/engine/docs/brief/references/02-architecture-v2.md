@@ -80,7 +80,7 @@ Source de vérité unique. Rien ne se re-narre en prose entre les rues.
     "river": null
   },
 
-  "to_act": 0,                     // siège dont c'est le tour
+  "to_act": 0,                     // siège dont c'est le tour (null = plus personne ne peut agir)
   "hero_seat": 0
 }
 ```
@@ -93,6 +93,14 @@ Source de vérité unique. Rien ne se re-narre en prose entre les rues.
   préserver.)
 - `amount` est le **montant total investi sur la rue par ce joueur après l'action**,
   pas l'incrément. Ça élimine une classe entière d'erreurs de calcul de pot.
+- `to_act` désigne un siège `active`, ou vaut `null` quand plus aucun siège ne peut
+  agir — état terminal légitime, pas une main invalide : all-in callé (le *runout* :
+  il ne reste que des cartes à distribuer puis un abattage) ou tapis que tout le
+  monde a couché. Le runout lui-même est **dérivé** (`pokercoach.state.is_runout`,
+  exposé en `runout` par `pc state`/`pc render`/`pc assert-state`), jamais stocké :
+  un champ dans `hand.json` serait libre de contredire `seats[].status`. Il couvre
+  aussi la forme où `to_act` pointe encore sur un siège — le payeur le plus profond
+  d'un tapis, resté `active` sans pouvoir ni suivre ni miser.
 - Tout montant est en **big blinds**, jamais en euros.
 - Le pot n'est **jamais stocké**, toujours dérivé. La v1 a documenté une confusion en
   session sur un pot affiché mal interprété ; un champ dérivé ne peut pas diverger.

@@ -186,6 +186,52 @@ def test_cli_apply_call_computes_amount(capsys, tmp_path):
     assert last_action == {"seat": 0, "action": "call", "amount": 4.0}
 
 
+def test_cli_apply_echoes_the_seat_and_position_it_applied_to(capsys, tmp_path):
+    # Regression (live-session narration bug): cmd_apply returned only the
+    # RESULTING state, whose to_act/to_act_position name whoever speaks NEXT
+    # -- nothing in the output identified who just acted. A coach narrating
+    # villain actions therefore had no way to check its own ordering after
+    # the fact, and narrated a sequence that differed from the one actually
+    # applied to the engine.
+    p = tmp_path / "h.json"
+    p.write_text(Path(HAND).read_text())
+    code, out, err = run(["apply", "--hand", str(p), "--action", "c"], capsys)
+    assert code == 0, err
+    parsed = json.loads(out)
+    assert parsed["applied_to"] == {"seat": 0, "position": "BTN/SB",
+                                     "action": "call", "amount": 4.0}
+    # ...and it is NOT the seat now to act: that distinction is the whole point.
+    assert parsed["to_act"] != parsed["applied_to"]["seat"]
+
+
+def test_cli_apply_echo_matches_the_action_actually_written_to_hand_json(capsys, tmp_path):
+    # The echo must be derived from the same write, not recomputed loosely:
+    # a shorthand code ("a") and an engine-computed amount must come back
+    # exactly as they were appended to streets[].actions.
+    p = tmp_path / "h.json"
+    p.write_text(Path(HAND).read_text())
+    code, out, err = run(["apply", "--hand", str(p), "--action", "a"], capsys)
+    assert code == 0, err
+    echoed = json.loads(out)["applied_to"]
+    written = json.loads(p.read_text())["streets"]["flop"]["actions"][-1]
+    assert echoed["seat"] == written["seat"]
+    assert echoed["action"] == written["action"] == "allin"
+    assert echoed["amount"] == written["amount"]
+
+
+def test_cli_apply_reports_no_applied_to_when_it_rejects_the_action(capsys, tmp_path):
+    # Nothing was applied, so nothing must be echoed -- an `applied_to` on a
+    # rejected call would be exactly the false confirmation this field exists
+    # to prevent.
+    p = tmp_path / "h.json"
+    original = Path(HAND).read_text()
+    p.write_text(original)
+    code, out, err = run(["apply", "--hand", str(p), "--action", "x"], capsys)
+    assert code == 1
+    assert "applied_to" not in out
+    assert p.read_text() == original
+
+
 def test_cli_apply_rejects_check_when_facing_a_bet(capsys, tmp_path):
     # Regression: "x" (check) used to be accepted unconditionally even
     # facing seat1's flop bet (4.0), silently corrupting hand.json.
@@ -526,3 +572,130 @@ def test_render_expect_board_fails_loudly_on_drift(capsys):
     code, _, err = run(["render", "--hand", HAND, "--expect-board", "A♠,A♥,A♦"], capsys)
     assert code == 1
     assert "board attendu" in err
+
+
+# --- runout (all-in callé) -------------------------------------------------
+
+RUNOUT_HAND = str(FIXTURES / "hu_flop_allin_called_runout.json")
+
+
+def test_cli_apply_writes_to_act_null_when_the_allin_is_called(capsys, tmp_path):
+    # Regression : `cmd_apply` n'écrivait `to_act` que si un siège actif
+    # restait (`if next_seat is not None`). Le call all-in laissait donc
+    # `to_act` sur le siège qui venait de faire tapis -- un état que
+    # `validate_and_load` refuse -- et `pc apply` échouait SANS écrire
+    # l'action qu'on venait de lui demander d'appliquer.
+    hand = json.loads(Path(HAND).read_text())
+    hand["streets"]["flop"]["actions"] = [
+        {"seat": 1, "action": "bet", "amount": 4.0},
+        {"seat": 0, "action": "allin", "amount": 97.0},
+    ]
+    hand["seats"][0]["status"] = "allin"
+    hand["to_act"] = 1
+    p = tmp_path / "h.json"
+    p.write_text(json.dumps(hand))
+
+    code, out, err = run(["apply", "--hand", str(p), "--action", "a"], capsys)
+    assert code == 0, err
+    assert json.loads(p.read_text())["to_act"] is None
+    parsed = json.loads(out)
+    assert parsed["to_act"] is None and parsed["runout"] is True
+    assert parsed["applied_to"] == {"seat": 1, "position": "BB",
+                                     "action": "allin", "amount": 97.0}
+
+
+def test_cli_render_and_assert_state_accept_a_runout(capsys):
+    code, out, err = run(["render", "--hand", RUNOUT_HAND, "--expect-street", "flop"], capsys)
+    assert code == 0, err
+    assert json.loads(out)["state"]["runout"] is True
+
+    code, out, err = run(["assert-state", "--hand", RUNOUT_HAND, "--street", "flop"], capsys)
+    assert code == 0, err
+    parsed = json.loads(out)
+    assert parsed["ok"] is True
+    # `to_act: null` seul se lit aussi bien "personne ne parle" que "champ
+    # absent" -- le booléen dit lequel.
+    assert parsed["to_act"] is None and parsed["runout"] is True
+
+
+def test_cli_apply_brief_and_budget_refuse_a_runout(capsys, tmp_path):
+    p = tmp_path / "h.json"
+    original = Path(RUNOUT_HAND).read_text()
+    p.write_text(original)
+    for argv in (["apply", "--hand", str(p), "--action", "x"],
+                 ["brief", "--hand", str(p)],
+                 ["budget", "--hand", str(p)]):
+        code, out, err = run(argv, capsys)
+        assert code == 1, argv
+        assert "runout" in err, (argv, err)
+    assert p.read_text() == original
+
+
+def test_cli_brief_refuses_a_runout_where_the_hero_is_still_the_active_seat(capsys, tmp_path):
+    # Le héros a callé le tapis avec le stack le plus profond : il reste
+    # "active" et `to_act` pointe sur lui, mais il n'a plus aucune décision à
+    # prendre. Sans la garde runout, `pc brief` déroulait ses gates jusqu'à un
+    # verdict sur une décision qui n'existe pas.
+    hand = json.loads(Path(RUNOUT_HAND).read_text())
+    hand["seats"][0]["stack"] = 200.0
+    hand["seats"][0]["status"] = "active"
+    hand["streets"]["flop"]["actions"] = [
+        {"seat": 1, "action": "bet", "amount": 4.0},
+        {"seat": 1, "action": "allin", "amount": 97.0},
+        {"seat": 0, "action": "call", "amount": 97.0},
+    ]
+    hand["to_act"] = 0
+    p = tmp_path / "h.json"
+    p.write_text(json.dumps(hand))
+    code, out, err = run(["brief", "--hand", str(p)], capsys)
+    assert code == 1
+    assert "runout" in err
+
+
+def test_cli_showdown_from_hand_resolves_a_runout_at_the_river(capsys, tmp_path):
+    # Le bout de chaîne que les deux blocages rendaient inatteignable sans
+    # retoucher hand.json à la main.
+    hand = json.loads(Path(RUNOUT_HAND).read_text())
+    hand["streets"]["turn"] = {"board": ["T♠", "9♥", "2♣", "5♦"], "actions": []}
+    hand["streets"]["river"] = {"board": ["T♠", "9♥", "2♣", "5♦", "8♥"], "actions": []}
+    p = tmp_path / "h.json"
+    p.write_text(json.dumps(hand, ensure_ascii=False))
+    code, out, err = run(["showdown", "--from-hand", str(p), "--hand", "BB:K♣,Q♣"], capsys)
+    assert code == 0, err
+    results = {r["name"]: r["result"] for r in json.loads(out)["results"]}
+    assert results == {"BTN/SB": "win", "BB": "lose"}
+
+
+def test_cli_guards_point_a_decided_hand_at_the_pot_not_at_the_runout_tools(capsys, tmp_path):
+    # Revue de PR, repro exact : héros shove préflop, l'adversaire fold. Plus
+    # aucun siège "active" (donc `to_act: null`), mais ce n'est PAS un runout
+    # -- il n'y a ni board à dérouler ni abattage. Les trois gardes disaient
+    # pourtant "runout, dérouler le board avec advance_street.py", qui refuse
+    # ensuite avec le bon message : un détour évitable, sur une PR dont
+    # l'argument est justement des messages qui disent quoi faire ensuite.
+    hand = json.loads(Path(HAND).read_text())
+    hand["streets"]["flop"] = None
+    hand["streets"]["preflop"]["actions"] = [
+        {"seat": 0, "action": "post", "amount": 0.5},
+        {"seat": 1, "action": "post", "amount": 1.0},
+        {"seat": 0, "action": "allin", "amount": 100.0},
+        {"seat": 1, "action": "fold", "amount": 1.0},
+    ]
+    hand["seats"][0]["status"] = "allin"
+    hand["seats"][1]["status"] = "folded"
+    hand["to_act"] = None
+    p = tmp_path / "h.json"
+    p.write_text(json.dumps(hand, ensure_ascii=False))
+
+    for argv in (["apply", "--hand", str(p), "--action", "x"],
+                 ["brief", "--hand", str(p)],
+                 ["budget", "--hand", str(p)]):
+        code, out, err = run(argv, capsys)
+        assert code == 1, argv
+        assert "déjà décidée" in err, (argv, err)
+        assert "advance_street.py" not in err and "showdown" not in err, (argv, err)
+
+    # Et l'outil vers lequel ils NE renvoient plus refuse toujours, avec sa
+    # propre formulation -- c'est la cohérence que le détour cassait.
+    code, out, err = run(["showdown", "--from-hand", str(p)], capsys)
+    assert code == 1
