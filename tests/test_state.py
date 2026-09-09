@@ -6,7 +6,7 @@ import pytest
 
 from pokercoach.state import (
     StateError, derive, hero_closes_action, ip_postflop, is_runout, n_behind,
-    players_to_act_behind, position_labels, postflop_acting_order_offsets,
+    no_decision_left, players_to_act_behind, position_labels, postflop_acting_order_offsets,
     preflop_acting_order_offsets, seats_still_to_act, to_call, validate_and_load,
 )
 
@@ -551,3 +551,30 @@ def test_a_hand_everyone_folded_to_is_not_a_runout():
     state = validate_and_load(raw)
     assert state.to_act is None
     assert is_runout(state) is False
+
+
+def test_no_decision_left_sends_a_runout_and_a_decided_hand_to_different_next_steps():
+    # Revue de PR : les trois gardes (`pc apply`, `pc budget`, `pc brief`)
+    # avaient chacune recopié `is_runout(state) or state.to_act is None` et
+    # renvoyaient donc "runout, dérouler le board" dans les DEUX cas -- y
+    # compris sur un tapis que tout le monde a couché, où il n'y a ni rue à
+    # ouvrir ni abattage. L'utilisateur qui suivait le conseil se faisait
+    # rattraper par advance_street.py ("la main est déjà décidée"), un détour
+    # évitable. La distinction vit maintenant à un seul endroit.
+    runout = validate_and_load(load_fixture(RUNOUT))
+    assert "runout" in no_decision_left(runout)
+    assert "advance_street.py" in no_decision_left(runout)
+
+    raw = load_fixture(RUNOUT)
+    raw["seats"][1]["status"] = "folded"
+    raw["streets"]["flop"]["actions"][-1] = {"seat": 1, "action": "fold", "amount": 4.0}
+    decided = validate_and_load(raw)
+    message = no_decision_left(decided)
+    assert "déjà décidée" in message
+    # Le piège : surtout PAS renvoyer vers les outils du runout, qui
+    # refuseront tous les deux.
+    assert "advance_street.py" not in message and "showdown" not in message
+
+
+def test_no_decision_left_returns_none_while_a_decision_remains():
+    assert no_decision_left(validate_and_load(load_fixture("hu_flop_cbet.json"))) is None

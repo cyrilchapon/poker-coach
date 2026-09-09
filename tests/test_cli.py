@@ -664,3 +664,38 @@ def test_cli_showdown_from_hand_resolves_a_runout_at_the_river(capsys, tmp_path)
     assert code == 0, err
     results = {r["name"]: r["result"] for r in json.loads(out)["results"]}
     assert results == {"BTN/SB": "win", "BB": "lose"}
+
+
+def test_cli_guards_point_a_decided_hand_at_the_pot_not_at_the_runout_tools(capsys, tmp_path):
+    # Revue de PR, repro exact : héros shove préflop, l'adversaire fold. Plus
+    # aucun siège "active" (donc `to_act: null`), mais ce n'est PAS un runout
+    # -- il n'y a ni board à dérouler ni abattage. Les trois gardes disaient
+    # pourtant "runout, dérouler le board avec advance_street.py", qui refuse
+    # ensuite avec le bon message : un détour évitable, sur une PR dont
+    # l'argument est justement des messages qui disent quoi faire ensuite.
+    hand = json.loads(Path(HAND).read_text())
+    hand["streets"]["flop"] = None
+    hand["streets"]["preflop"]["actions"] = [
+        {"seat": 0, "action": "post", "amount": 0.5},
+        {"seat": 1, "action": "post", "amount": 1.0},
+        {"seat": 0, "action": "allin", "amount": 100.0},
+        {"seat": 1, "action": "fold", "amount": 1.0},
+    ]
+    hand["seats"][0]["status"] = "allin"
+    hand["seats"][1]["status"] = "folded"
+    hand["to_act"] = None
+    p = tmp_path / "h.json"
+    p.write_text(json.dumps(hand, ensure_ascii=False))
+
+    for argv in (["apply", "--hand", str(p), "--action", "x"],
+                 ["brief", "--hand", str(p)],
+                 ["budget", "--hand", str(p)]):
+        code, out, err = run(argv, capsys)
+        assert code == 1, argv
+        assert "déjà décidée" in err, (argv, err)
+        assert "advance_street.py" not in err and "showdown" not in err, (argv, err)
+
+    # Et l'outil vers lequel ils NE renvoient plus refuse toujours, avec sa
+    # propre formulation -- c'est la cohérence que le détour cassait.
+    code, out, err = run(["showdown", "--from-hand", str(p)], capsys)
+    assert code == 1

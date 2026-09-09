@@ -53,8 +53,8 @@ from . import render as render_mod, showdown as showdown_mod, sizing as sizing_m
 from .cards import Card, CardError, parse_card, parse_cards
 from .equity import equity as compute_equity
 from .state import (
-    STREETS, StateError, derive, is_runout, n_behind as derive_n_behind_state, position_labels,
-    remaining_stack, validate_and_load,
+    STREETS, StateError, derive, is_runout, n_behind as derive_n_behind_state, no_decision_left,
+    position_labels, remaining_stack, validate_and_load,
 )
 
 
@@ -98,10 +98,10 @@ def cmd_line(args: argparse.Namespace) -> dict[str, Any]:
 
 def cmd_budget(args: argparse.Namespace) -> dict[str, Any]:
     state = _load_state(args.hand)
-    if is_runout(state) or state.to_act is None:
+    no_decision = no_decision_left(state)
+    if no_decision is not None:
         raise StateError(
-            "pc budget évalue une décision à prendre, or il n'y en a plus : l'all-in est déjà "
-            "callé (runout) — dérouler le board avec advance_street.py, puis pc showdown"
+            f"pc budget évalue une décision à prendre, or il n'y en a plus : {no_decision}"
         )
     # Régression : lisait les cartes du siège au trait (`to_act`) mais la
     # pression de ce même `to_act` -- cohérent entre les deux, mais divergent
@@ -642,13 +642,12 @@ def cmd_apply(args: argparse.Namespace) -> dict[str, Any]:
     if action not in _SHORTHAND.values():
         raise StateError(f'action inconnue : {code!r} (attendu f/x/c/b/r/a ou leur forme longue)')
 
+    # Écarte du même coup `to_act is None` : ce cas est toujours l'un des deux
+    # états terminaux, donc `acting_seat` est un siège réel en dessous.
+    no_decision = no_decision_left(state)
+    if no_decision is not None:
+        raise StateError(f"aucune action légale : {no_decision}")
     acting_seat = state.to_act
-    if acting_seat is None or is_runout(state):
-        raise StateError(
-            "aucune action légale : plus aucune décision à prendre sur cette main (all-in callé "
-            "— runout) — il ne reste que des cartes à distribuer (advance_street.py), puis "
-            "pc showdown"
-        )
     acting_position = position_labels(state)[acting_seat]
     already_in = street_contribution(state, state.street, acting_seat)
     to_call_amt = compute_to_call(state)

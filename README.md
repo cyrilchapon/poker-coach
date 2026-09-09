@@ -589,7 +589,12 @@ all-in could not be run out at all).
   (nothing to call) nor bet (nobody left to pay). `pc state`/`pc render`/
   `pc assert-state` expose it as `runout`; `pc apply`, `pc brief` and
   `pc budget` refuse a runout instead of advising a decision that doesn't
-  exist. `pc apply` also writes `to_act: null` itself now — it previously
+  exist — through a single `state.no_decision_left()`, which names *which*
+  terminal state it is and where to go next. Those three guards had each
+  copied the condition and collapsed both cases into "runout, deal the board
+  out", so a shove everyone folded to sent the caller to `advance_street.py`,
+  which then refused it with the correct message: a detour, on a change whose
+  own argument is error messages that say what to do next. `pc apply` also writes `to_act: null` itself now — it previously
   left `to_act` on the seat that had just shoved, so applying the call that
   ends the betting failed and wrote nothing.
 - **Nothing in `live-session/SKILL.md` said where the speaking order comes

@@ -569,6 +569,31 @@ def is_runout(state: HandState) -> bool:
     return to_call(state, seat=active[0]) <= 0
 
 
+def no_decision_left(state: HandState) -> str | None:
+    """Pourquoi il n'y a plus aucune décision à prendre sur cette main, en une
+    phrase qui dit quoi faire à la place — ou ``None`` s'il en reste une.
+
+    Les deux états terminaux se ressemblent (``to_act`` vaut ``None`` dans un
+    cas sur deux) mais n'appellent PAS la même suite : un runout se déroule
+    (``advance_street.py``) puis s'abat (``pc showdown``) ; une main que tout
+    le monde a couchée n'a ni rue à ouvrir ni abattage, le pot revient tel
+    quel. Factorisé ici précisément parce que les trois gardes appelantes
+    (``pc apply``, ``pc budget``, ``pc brief``) avaient chacune recopié la
+    condition et confondu les deux : elles renvoyaient toutes « runout,
+    dérouler le board », y compris sur un tapis que tout le monde avait
+    couché -- l'utilisateur qui suivait le conseil se faisait alors
+    rattraper par ``advance_street.py`` (« la main est déjà décidée »), un
+    détour évitable avec une information déjà sous la main.
+    """
+    if is_runout(state):
+        return ("l'all-in est déjà callé (runout) — dérouler le board avec advance_street.py, "
+                "puis résoudre par pc showdown")
+    if state.to_act is None:
+        return ("la main est déjà décidée (tout le monde a couché) — attribuer le pot "
+                "directement, il n'y a ni rue à dérouler ni abattage")
+    return None
+
+
 def n_defenders(state: HandState) -> int:
     """Nombre de sièges encore ACTIFS (peuvent encore agir) qui font face à la
     mise la plus haute de la rue courante sans l'avoir encore égalée —
