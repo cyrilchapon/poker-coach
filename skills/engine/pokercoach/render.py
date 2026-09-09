@@ -44,9 +44,20 @@ coins + 1 haut) : les sièges non-Héros, dans l'ordre de parole réel
   y a 5 sièges non-Héros (6-max).
 
 Largeurs (fixées sur le format de référence 6-max) : ``INNER = 18``,
-``SIDE_W = 10``, largeur totale ``TOTAL_W = 40``. Invariantes quel que soit
+``SIDE_W = 11``, largeur totale ``TOTAL_W = 42``. Invariantes quel que soit
 le nombre de sièges — seule la HAUTEUR du rectangle varie avec le nombre de
 paires verticales.
+
+``SIDE_W`` vaut exactement ce qu'il faut pour le PLUS LONG label possible en
+colonne latérale (``UTG+1(cst)``, 10 caractères : la position la plus longue
+de ``state.POSITION_LABELS`` hors heads-up, plus une abréviation d'archétype
+entre parenthèses), plus l'espace qui l'écarte du bord du rectangle. Avec
+moins, le label est tronqué silencieusement à gauche (``UTG+1(cst`` -- la
+parenthèse fermante saute) et déborde à droite, la ligne dépassant alors
+``TOTAL_W`` sur lequel le titre de rue et le pied Héros sont centrés.
+``BTN/SB(cst)``, plus long encore, n'entre pas en compte : en heads-up
+l'unique siège non-Héros est forcément le siège "top" (1 siège non-Héros =
+nombre impair), centré sur ``TOTAL_W``, jamais en colonne latérale.
 
 Ordre des lignes À L'INTÉRIEUR du rectangle (de ``╭`` à ``╰``) :
 
@@ -88,6 +99,12 @@ siège (déjà connue du schéma, ce n'est PAS une heuristique sur le montant) :
 tout autre siège (cas de l'ante "par joueur", cf. ``new_hand.py``, qui n'est
 ni SB ni BB).
 
+Exception pour le Héros : un poste n'est pas une décision, donc sa ligne
+d'action garde le ``?`` de décision en attente et lui adjoint le montant
+posté — ``? · 1𝄫`` en BB, ``? · 0.5𝄫`` en SB. Sans ça le seul marqueur de
+décision du dessin disparaissait dès que le Héros était dans les blindes,
+au profit d'un libellé (``bb``) que le pied du rectangle donne déjà.
+
 Abréviation d'archétype (3 lettres, table explicite — ne dépend jamais
 d'une troncature accidentelle) : ``nit``, ``tag``, ``lag`` inchangés,
 ``fish`` -> ``fsh``, ``maniac`` -> ``mnc``, ``calling_station`` -> ``cst``
@@ -120,7 +137,7 @@ from typing import Any
 BB_UNIT = "𝄫"
 INNER = 18
 BOX_W = INNER + 2
-SIDE_W = 10
+SIDE_W = 11
 HALF = INNER // 2
 TOTAL_W = SIDE_W * 2 + BOX_W
 
@@ -305,8 +322,19 @@ def render(*, seats: dict[str, dict], hero_position: str, hero: dict, board: lis
     hero_action = hero.get("action") or (
         "fold" if hero_status == "folded" else "allin" if hero_status == "allin" else "?"
     )
+    # Une blinde (ou un ante) n'est pas une DÉCISION : le Héros qui n'a fait
+    # que poster a toujours sa décision devant lui, exactement comme s'il
+    # n'avait rien mis. Afficher "bb"/"sb" à la place du ``?`` faisait
+    # disparaître le seul marqueur de décision en attente du dessin -- et
+    # redisait ce que le pied du rectangle indique déjà (``BB · 99𝄫``). On
+    # garde donc le ``?`` ET le montant déjà engagé, qui lui n'est pas
+    # redondant (il fixe le to-call réel) : ``? · 1𝄫``.
+    #
+    # Côté sièges non-Héros, ``post`` reste relabellisé en ``sb``/``bb`` :
+    # là, la case vide signifie "n'a pas encore parlé" et il n'existe aucun
+    # ``?`` à préserver -- c'est le libellé qui porte l'information.
     if hero_action == "post":
-        hero_action = "sb" if hero_position == "SB" else "bb" if hero_position == "BB" else "post"
+        hero_action = "?"
     hero_amount = hero.get("amount")
     # Même correctif que `action_content` ci-dessus : un montant à 0 ne doit
     # pas faire disparaître le "· 0𝄫".

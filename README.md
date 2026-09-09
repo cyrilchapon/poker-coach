@@ -551,6 +551,38 @@ six more issues, ranked by the report itself from most to least severe:
   `advance_street.py` runs before any narration of the street it opens, not
   after.
 
+## Render review: findings and fixes
+
+Rendering one table per seat count (2, 3, 4, 5, 6, 7, 8) surfaced two
+display bugs that the golden tests couldn't catch, because both goldens
+used labels shorter than the real ones.
+
+- **The longest side-column label was truncated on the left and overflowed
+  on the right.** `SIDE_W = 10` left 9 characters for the left column's
+  label, but `UTG+1(cst)` — the longest `state.POSITION_LABELS` entry
+  outside heads-up, plus a 3-letter archetype in parentheses — is 10, so
+  its closing parenthesis was silently dropped (`UTG+1(cst`). The same
+  label on the right, never truncated at all, instead pushed the line one
+  character past `TOTAL_W`, the width the street header and hero footer are
+  centred on. Only `UTG+1` is affected, so only 7- and 8-max show it.
+  `SIDE_W` is now 11 (`TOTAL_W = 42`): exactly the widest possible label
+  plus the space that separates it from the box. `BTN/SB(cst)` is longer
+  still but can't occur in a side column — heads-up has one non-hero seat,
+  an odd count, so that seat is always the centred "top" seat.
+  `tests/test_render.py`'s 8-max golden used `"UTG1"`, a label the engine
+  never produces; it now uses the real `"UTG+1"` and so actually exercises
+  the width.
+- **A hero in the blinds lost the pending-decision mark.** `post` is
+  relabelled `sb`/`bb` by seat position, hero included — so a hero who had
+  only posted showed `bb · 1𝄫`, and the `?` that marks a decision still to
+  be made disappeared from the drawing exactly when the hero was in the
+  blinds. Posting a blind is not a decision. The hero's action row now
+  keeps both: `? · 1𝄫` (`? · 0.5𝄫` in the SB) — the mark, plus the amount
+  already committed, which is not redundant (it sets the real to-call).
+  Non-hero seats keep `sb`/`bb`: there an empty cell means "hasn't acted
+  yet" and there is no `?` to preserve, so the label is what carries the
+  information.
+
 ## Repo layout
 
 ```
