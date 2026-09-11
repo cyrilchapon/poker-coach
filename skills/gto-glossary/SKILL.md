@@ -5,9 +5,9 @@ description: Glossaire du jargon standard des solveurs et de la théorie GTO en 
 
 # Glossaire GTO / jargon solveur
 
-## v2 : lookup, pas préchargement
+## Lookup, pas préchargement
 
-En v1 ce fichier faisait ~5,9 ko et était chargé en entier dans le contexte, que la décision soit triviale ou non. En v2, le glossaire vit dans `pokercoach/glossary.py` et se consulte terme par terme :
+Le glossaire vit dans `pokercoach/glossary.py` et se consulte terme par terme — ne jamais le charger en entier :
 
 ```bash
 scripts/pc glossary MDF
@@ -15,11 +15,11 @@ scripts/pc glossary "pot odds"
 scripts/pc glossary blocker
 ```
 
-Retourne une définition d'une phrase (quarante caractères, pas 5,9 ko). Termes disponibles : range, combo, équité, EV, pot odds, implied odds, reverse implied odds, SPR, MDF, blocker, range polarisée/linéaire/condensée, range advantage, nut advantage, c-bet, 3bet, 4bet, squeeze, iso-raise, multiway, stab, calling station, fold equity, réalisation d'équité, GTO, exploit, ICM, bubble factor, n_behind, ip_postflop, ATT, DEF, TPTK, gate.
+Retourne une définition d'une phrase. Termes disponibles : range, combo, équité, EV, pot odds, implied odds, reverse implied odds, SPR, MDF, blocker, range polarisée/linéaire/condensée, range advantage, nut advantage, c-bet, 3bet, 4bet, squeeze, iso-raise, multiway, stab, calling station, fold equity, réalisation d'équité, GTO, exploit, ICM, bubble factor, n_behind, ip_postflop, ATT, DEF, TPTK, gate.
 
 Alias reconnus (résolus vers le terme canonique ci-dessus, cf. `glossary.ALIASES`) : `isolation`/`isolation raise`/`iso raise` → iso-raise ; `equity_realization`/`realisation_equite` → réalisation d'équité. Les variantes snake_case (`fold_equity`, `equity_realization`...) sont normalisées automatiquement.
 
-## Règle d'usage (inchangée)
+## Règle d'usage
 
 1. Utiliser ces termes exacts (pas de paraphrase qui évite le jargon).
 2. Définir un terme en une phrase courte, en gras, la première fois qu'il apparaît dans une session donnée.

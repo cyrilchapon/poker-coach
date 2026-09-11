@@ -34,9 +34,9 @@ Pour tout litige non couvert ci-dessus (angle shooting, dealer error, misdeal, j
 
 ## Vérification obligatoire de toute affirmation sur une main — jamais à l'œil
 
-**Deux erreurs réelles constatées en session de test (v1)** : un tirage quinte annoncé avec seulement 4 cartes consécutives (il en faut 5), et une main décrite comme "deux paires aux As" alors que la seule paire venait du board. Les deux fois, l'erreur a été commise en évaluant la main de tête.
+**Règle dure, sans exception** : toute affirmation sur le type ou la force d'une main en cours, ou sur le nombre d'outs disponibles, passe par le moteur — jamais une évaluation manuelle, même quand la main semble évidente. Ça s'applique à chaque rue.
 
-**Règle dure, sans exception, inchangée en v2** : toute affirmation sur le type/la force d'une main en cours, ou sur le nombre d'outs disponibles, passe par le moteur — jamais une évaluation manuelle, même quand la main semble évidente. Ça s'applique à chaque rue.
+Deux erreurs typiques que ça élimine, toutes deux commises en évaluant de tête : annoncer un tirage quinte sur 4 cartes consécutives (il en faut 5 pour la quinte, donc 4 cartes utiles + une carte à venir), et décrire une main comme « deux paires aux As » quand la seule paire vient du board.
 
 ```bash
 scripts/pc hand --hand hand.json [--seat N]

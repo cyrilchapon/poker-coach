@@ -40,30 +40,53 @@ made_hand_classes:
     definition: Brelan formé par une paire du board plus une carte privée. Kicker déterminant.
   - id: two_pair
     definition: >
-      Double paire sans paire au board. Sous-classée par rang de 1 (top two) à 10.
-      Si le board est apparié, la "double paire" inclut la paire du board :
-      la force réelle est celle d'une top/middle paire.
+      Double paire. Deux cas, distingués par `made_sub.includes_board_pair` :
+      (a) board NON apparié, les deux paires viennent des cartes privées ->
+      sous-classée par rang de 1 (top two) à 10 ;
+      (b) paire SERVIE qui ne touche aucun rang du board + board apparié
+      (ex. TT sur J-9-9) -> `includes_board_pair: true`. La moitié "paire du
+      board" est partagée par tous les joueurs, seule la paire servie
+      départage : `made_sub.strength_proxy` nomme la classe de paire simple
+      qui porte cette force (second_pair / third_pair / fourth_fifth_pair /
+      underpair, selon le nombre de rangs du board au-dessus), et c'est elle
+      que le budget interroge — pas la table two_pair, calibrée pour (a).
+      Un héros qui apparie LUI-MÊME un rang d'un board déjà apparié
+      (ex. K4 sur 9-9-4) n'est pas une double paire : sa deuxième paire est
+      celle du board, la main est reclassée en paire simple.
+      Une paire servie supérieure à tout le board reste `overpair`.
   - id: overpair
     definition: Paire servie supérieure à toutes les cartes du board.
   - id: top_pair
     definition: Paire avec la carte la plus haute du board. Sous-classée par kicker (TPTK, TPSK, 3e, 4e, 5e, autre).
   - id: second_pair
-    definition: Paire avec 1 surcarte au board.
+    definition: >
+      Paire avec 1 surcarte au board — que la paire vienne d'une carte privée
+      qui touche le board ou d'une paire SERVIE placée sous la seule carte
+      haute (`made_sub.pocket_pair`).
   - id: third_pair
-    definition: Paire avec 2 surcartes au board.
+    definition: Paire avec 2 surcartes au board. Même règle pour une paire servie.
   - id: fourth_fifth_pair
-    definition: Paire avec 3 ou 4 surcartes au board.
+    definition: Paire avec 3 ou 4 surcartes au board. Même règle pour une paire servie.
   - id: underpair
     definition: >
       Paire de poche STRICTEMENT sous toutes les cartes du board (ne touche
-      aucun rang du board). Absente de la taxonomie source à 15 classes
-      (PokerSkill, annexe D.2) -- ajoutée ici (rapport de bug live-session
-      #4) : le moteur classait ce cas dans `weak_showdown` en le signalant
-      lui-même comme "non couvert par la taxonomie", alors que c'est une
-      classe très fréquente (tout set-mining raté, ~7 fois sur 8). Budgets
-      ATT/DEF réutilisés de `weak_showdown` (même profil de showdown
-      marginal) faute de calibration dédiée dans l'annexe E -- curseur, pas
-      une vérité figée, cf. att-def-budgets.yaml.
+      aucun rang du board), sur un board NON apparié. "Strictement sous
+      TOUTES" au sens littéral : une paire servie qui a ne serait-ce qu'un
+      rang du board en dessous d'elle n'est pas de cette classe, elle est
+      placée par sa position (`second_pair` / `third_pair` /
+      `fourth_fifth_pair`, avec `made_sub.pocket_pair: true`) — TT sur J-9-6
+      est une seconde paire, pas un underpair. Absente de la taxonomie
+      source à 15 classes (PokerSkill, annexe D.2) -- ajoutée ici : le moteur
+      classait ce cas dans `weak_showdown` en le signalant lui-même comme
+      "non couvert par la taxonomie", alors que c'est une classe très
+      fréquente (tout set-mining raté, ~7 fois sur 8). Budgets ATT/DEF
+      réutilisés de `weak_showdown` (même profil de showdown marginal) faute
+      de calibration dédiée dans l'annexe E -- curseur, pas une vérité figée,
+      cf. att-def-budgets.yaml.
+      Sur un board APPARIÉ, une paire servie n'est jamais de cette classe :
+      elle a réellement deux paires -> `two_pair` avec
+      `includes_board_pair: true` (le `strength_proxy` peut valoir
+      `underpair`, c'est le budget qui est emprunté, pas la classe).
   - id: nuts_high
     definition: Carte haute la plus élevée non présente au board (typiquement A-high). Meilleure non-paire au showdown.
   - id: second_high

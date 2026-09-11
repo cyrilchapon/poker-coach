@@ -64,6 +64,81 @@ def test_two_pair_reclassified_when_board_already_paired():
     assert r.made in ("top_pair", "second_pair", "third_pair", "fourth_fifth_pair")
 
 
+def test_pocket_pair_on_a_paired_board_is_two_pair_not_an_underpair():
+    # Live-session bug report: hero TT on J-9-9-3 came back as
+    # made="underpair". Two things wrong at once -- hero holds a genuine two
+    # pair (his own tens + the board's nines), and TT is not "strictly below
+    # every board card" (the literal definition of `underpair`), it only
+    # trails the jack.
+    r = H(["T♠", "T♥"], ["J♠", "9♦", "9♣", "3♥"])
+    assert r.made == "two_pair"
+    assert r.made_sub["includes_board_pair"] is True
+    assert r.made_sub["pocket_rank"] == "T"
+    assert r.made_sub["board_pair_rank"] == "9"
+    assert r.made_sub["board_ranks_above"] == 1
+    # Half the hand is the shared board pair, so the strength that decides
+    # the hand is the pocket pair's rank among the board's ranks.
+    assert r.made_sub["strength_proxy"] == "second_pair"
+
+
+def test_pocket_pair_below_a_paired_board_is_two_pair_with_an_underpair_proxy():
+    # Same rule, weakest case: 22 on J-9-9 really is two pair (deuces and
+    # nines), but nothing about that beats a single board card -- the proxy
+    # keeps it on underpair-level budgets instead of promoting it.
+    r = H(["2♠", "2♥"], ["J♠", "9♦", "9♣"])
+    assert r.made == "two_pair"
+    assert r.made_sub["strength_proxy"] == "underpair"
+
+
+def test_pocket_pair_over_a_paired_board_stays_an_overpair():
+    # An overpair on a paired board is also literally two pair, but
+    # "overpair" is the standard term AND the class with calibrated budgets
+    # (including its own paired-board penalty) -- left untouched on purpose.
+    r = H(["A♠", "A♥"], ["J♠", "9♦", "9♣"])
+    assert r.made == "overpair"
+
+
+def test_pocket_pair_on_an_unpaired_board_is_not_two_pair():
+    # The two_pair branch only fires when the BOARD supplies the second pair.
+    r = H(["T♠", "T♥"], ["J♠", "9♦", "6♣"])
+    assert r.made != "two_pair"
+    assert "includes_board_pair" not in r.made_sub
+
+
+def test_pocket_pair_between_board_ranks_is_placed_by_its_position():
+    # A pocket pair that touches no board rank used to be a binary: above the
+    # top board card -> overpair, anything else -> underpair. But TT on J-9-6
+    # beats the nine and the six and only trails the jack -- that is a second
+    # pair, not a pair "below the board" (the literal meaning of underpair).
+    second = H(["T♠", "T♥"], ["J♠", "9♦", "6♣"])
+    assert second.made == "second_pair"
+    assert second.made_sub["board_ranks_above"] == 1
+    assert second.made_sub["pocket_pair"] is True
+
+    third = H(["5♠", "5♥"], ["K♦", "9♣", "4♥"])
+    assert third.made == "third_pair"
+    assert third.made_sub["board_ranks_above"] == 2
+
+    fifth = H(["3♠", "3♥"], ["A♦", "K♣", "9♥", "7♦", "2♣"])
+    assert fifth.made == "fourth_fifth_pair"
+    assert fifth.made_sub["board_ranks_above"] == 4
+
+
+def test_pocket_pair_above_the_whole_board_is_still_an_overpair():
+    r = H(["Q♠", "Q♥"], ["9♦", "6♣", "2♥"])
+    assert r.made == "overpair"
+    assert r.made_sub["board_ranks_above"] == 0
+
+
+def test_hero_pairing_an_already_paired_board_is_still_a_plain_pair():
+    # The other half of the paired-board rule, unchanged: here the hero's
+    # own card makes one pair and the BOARD makes the other, so the "two
+    # pair" is hero's pair + a pair everybody shares -- a plain pair.
+    r = H(["4♠", "K♥"], ["9♦", "9♣", "4♥"])
+    assert r.made == "second_pair"
+    assert "includes_board_pair" not in r.made_sub
+
+
 def test_double_paired_board_is_flagged_as_special_override():
     r = H(["4♠", "K♥"], ["9♦", "9♣", "4♥", "4♦"])
     assert r.board_override == "double_paired_board"
@@ -95,13 +170,15 @@ def test_second_and_third_pair():
 
 
 def test_underpair_has_its_own_class():
-    # Regression (live-session bug report #4) : an underpair (pocket pair
-    # strictly below every board card) used to fall into weak_showdown, with
-    # the engine's own note flagging it as "not covered by the taxonomy" --
-    # frequent enough (any failed set-mine) to deserve its own class.
-    r = H(["5♠", "5♥"], ["9♦", "8♣", "2♥"])
+    # An underpair (pocket pair strictly below every board card) used to fall
+    # into weak_showdown, with the engine's own note flagging it as "not
+    # covered by the taxonomy" -- frequent enough (any failed set-mine) to
+    # deserve its own class. Board deliberately has NO card below the pocket
+    # pair: that is what the class means.
+    r = H(["5♠", "5♥"], ["9♦", "8♣", "7♥"])
     assert r.made == "underpair"
-    assert r.made_sub == {"pocket_rank": "5"}
+    assert r.made_sub["pocket_rank"] == "5"
+    assert r.made_sub["board_ranks_above"] == 3
 
 
 def test_high_card_buckets():
@@ -319,3 +396,33 @@ def test_outs_winning_is_none_on_the_river_like_outs():
 def test_outs_winning_is_exposed_in_json():
     r = H(["2♦", "2♠"], ["6♠", "9♥", "4♥"]).to_json()
     assert r["outs"] == 11 and r["outs_winning"] == 2
+
+
+def test_pocket_pair_under_both_pairs_of_a_double_paired_board_never_plays():
+    # Live-session bug: on a board that ALREADY supplies two pairs, the best
+    # two pair is made of the two highest pairs available -- board included.
+    # 5-5 on J-J-9-9-3 is not part of it: the hero plays the board's jacks
+    # and nines with a five for a kicker, and the fives never form a pair in
+    # the winning hand. Counting board RANKS above the pocket pair (J and 9,
+    # so "third_pair") lent it an att 1.2 / def 1.9 it has at no point.
+    r = H(["5♠", "5♥"], ["J♠", "J♣", "9♥", "9♦", "3♥"])
+    assert r.made == "two_pair"  # literally true: the board's J and 9
+    assert r.made_sub["strength_proxy"] == "underpair"
+
+
+def test_pocket_pair_between_the_two_pairs_of_a_double_paired_board_does_play():
+    # Same board, and the rule is not "a double-paired board mutes every
+    # pocket pair": TT beats the lower board pair, so the best hand becomes
+    # jacks and TENS -- the pocket pair is genuinely the second pair.
+    r = H(["T♠", "T♥"], ["J♠", "J♣", "9♥", "9♦", "3♥"])
+    assert r.made == "two_pair"
+    assert r.made_sub["strength_proxy"] == "second_pair"
+
+
+def test_pocket_pair_on_a_singly_paired_board_plays_whatever_its_rank():
+    # The exclusion above is specific to a board holding TWO pairs. With one
+    # board pair the pocket pair always supplies the other half, however low
+    # it is -- 7-7 on J-9-9-3 really is nines and sevens.
+    r = H(["7♥", "7♦"], ["J♠", "9♥", "9♣", "3♦"])
+    assert r.made == "two_pair"
+    assert r.made_sub["strength_proxy"] == "third_pair"
