@@ -269,3 +269,41 @@ def test_narrow_counts_structurally_removed_combos_as_removed():
                          n_opponents_active=3).to_json()
     assert out["combos_removed"] > 0
     assert out["remaining_combos"] < out["original_combos"]
+
+
+def test_narrow_bluff_floor_never_promotes_a_combo_that_entered_below_it():
+    # A FLOOR does not promote. Assigning the bare constant lifted a combo
+    # that entered under it -- an input range of `72o@3%` came back at 8%,
+    # i.e. a retained_pct of 266.7% under a note announcing a drop. This
+    # matters in practice because brief._narrow_through_history replays the
+    # narrowing street by street, feeding each output range back in: a combo
+    # floored on the flop re-entered the turn at 8% and got promoted again.
+    board = parse_cards(["A♠", "K♥", "9♣"])
+    result = narrow.narrow("72o@3%", board, "raise", pot_type="srp", street="flop",
+                            pressure_spent=5.0)
+    assert result.kept_at_floor  # the mechanism under test did fire
+    assert result.retained_pct <= 100.0
+    assert "@3.00%" in result.range_str
+    assert "@8.00%" not in result.range_str
+
+
+def test_narrow_bluff_floor_is_still_flat_for_combos_entering_above_it():
+    # Guard for the `min` above: a combo entering at full weight must still
+    # land exactly on the floor, not be scaled by it (revue #2 regression).
+    board = parse_cards(["A♠", "K♥", "9♣"])
+    result = narrow.narrow("72o", board, "raise", pot_type="srp", street="flop",
+                            pressure_spent=5.0)
+    assert result.kept_at_floor
+    assert "@8.00%" in result.range_str
+
+
+def test_narrow_bluff_floor_does_not_erode_when_replayed_street_by_street():
+    # The floor's whole point: re-narrowing an already-floored output must be
+    # idempotent, never 0.08 -> 0.0064 -> 0.000512 over three streets.
+    board = parse_cards(["A♠", "K♥", "9♣"])
+    first = narrow.narrow("72o", board, "raise", pot_type="srp", street="flop",
+                           pressure_spent=5.0)
+    second = narrow.narrow(first.range_str, board, "raise", pot_type="srp", street="flop",
+                            pressure_spent=5.0)
+    assert "@8.00%" in second.range_str
+    assert second.retained_pct == 100.0

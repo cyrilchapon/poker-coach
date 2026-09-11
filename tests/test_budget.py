@@ -286,3 +286,72 @@ def test_top_kicker_rows_are_found_under_every_spelling_the_yaml_uses():
     b = compute(second, tex, pot_type="three_bet_pot", street="flop", n_opponents_active=1,
                 pressure_spent=0.0, pressure_faced=0.0)
     assert (b.att_base, b.def_base) == pytest.approx((1.5, 2.3))  # `top_kicker`, not `other`
+
+
+# --- paire servie qui a DOUBLÉ avec la paire du board : une main de valeur ---
+
+def test_pocket_pair_that_made_two_pair_is_not_a_bluff_line_for_the_exploit_gate():
+    # Live-session bug: G4 treats an outranked pocket pair as a bluff line
+    # (the documented set-mining leak) -- but 7-7 on J-9-9-3 is not a missed
+    # set, it is two pair, nines and sevens. Against a calling station the
+    # gate zeroed its ATT and removed bet/raise from the viable actions of a
+    # hand we specifically want to bet against that profile.
+    hc, tex = hc_and_texture(["7♥", "7♦"], ["J♠", "9♥", "9♣", "3♦"])
+    b = compute(hc, tex, pot_type="srp", street="turn", n_opponents_active=1,
+                villain_archetype="calling_station", pressure_spent=0.0,
+                pressure_faced=0.0, facing_bet=False)
+    assert "bet" in b.viable_actions
+
+
+def test_bare_outranked_pocket_pair_is_still_a_bluff_line_for_the_exploit_gate():
+    # Guard for the exclusion above: the real missed set -- a bare pocket
+    # pair that paired nothing -- must keep triggering the gate.
+    hc, tex = hc_and_texture(["5♥", "5♦"], ["A♠", "K♥", "9♣", "3♦"])
+    b = compute(hc, tex, pot_type="srp", street="turn", n_opponents_active=1,
+                villain_archetype="calling_station", pressure_spent=0.0,
+                pressure_faced=0.0, facing_bet=False)
+    assert "bet" not in b.viable_actions
+
+
+def test_two_pair_through_a_pocket_pair_is_budgeted_like_the_same_hand_hit_on_board():
+    # 7-7 on J-9-9-3 and 7-6 on J-9-9-7 are the SAME five cards: nines and
+    # sevens, jack kicker. The "paire servie surclassée, seulement 2 outs"
+    # special was firing on the first (def 0.6 -> 0.3 in a 3BP) while the
+    # second took the generic line at 1.5 -- the premise of that special is
+    # a BARE pocket pair with 2 outs to improve, and this one is already
+    # improved. Both must land on the same budget.
+    pocket_hc, pocket_tex = hc_and_texture(["7♥", "7♦"], ["J♠", "9♥", "9♣", "3♦"])
+    board_hc, board_tex = hc_and_texture(["7♥", "6♦"], ["J♠", "9♥", "9♣", "7♦"])
+    kw = dict(pot_type="three_bet_pot", street="turn", n_opponents_active=1,
+              pressure_spent=0.0, pressure_faced=0.0, facing_bet=True)
+    pocket = compute(pocket_hc, pocket_tex, **kw)
+    board = compute(board_hc, board_tex, **kw)
+    assert (pocket.att_base, pocket.def_base) == (board.att_base, board.def_base)
+
+
+def test_bare_outranked_pocket_pair_keeps_its_three_bet_pot_penalty():
+    # Guard for the exclusion above: the special still applies to the hand it
+    # was written for -- a bare pocket pair, 2 outs, in a raised pot.
+    hc, tex = hc_and_texture(["5♥", "5♦"], ["A♠", "K♥", "9♣", "3♦"])
+    b = compute(hc, tex, pot_type="three_bet_pot", street="turn", n_opponents_active=1,
+                pressure_spent=0.0, pressure_faced=0.0, facing_bet=True)
+    srp = compute(hc, tex, pot_type="srp", street="turn", n_opponents_active=1,
+                  pressure_spent=0.0, pressure_faced=0.0, facing_bet=True)
+    assert b.att_base == 0.0
+    assert b.def_base < srp.def_base
+
+
+def test_board_hit_pair_stab_is_wired_in_a_raised_pot():
+    # `three_bet_plus_special.board_hit_pair: {att: 1.5}` was dead code --
+    # only the pocket_pair half was read. The 3BP/4BP nodes of third_pair and
+    # fourth_fifth_pair carry a bare `def`, so a board-hit third pair came
+    # out at att 0.0: no stab possible in a raised pot, though the table
+    # prescribes one explicitly ("stab <= 30% pot quand l'adversaire montre
+    # de la faiblesse").
+    hc, tex = hc_and_texture(["9♠", "2♦"], ["K♠", "Q♥", "9♣", "4♦"])
+    assert hc.made == "third_pair"
+    b = compute(hc, tex, pot_type="three_bet_pot", street="turn", n_opponents_active=1,
+                pressure_spent=0.0, pressure_faced=0.0, facing_bet=True)
+    assert b.att_base == 1.5
+    # Only the ATT is overridden: the line carries no `def` of its own.
+    assert b.def_base == 1.5

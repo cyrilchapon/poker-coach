@@ -396,3 +396,33 @@ def test_outs_winning_is_none_on_the_river_like_outs():
 def test_outs_winning_is_exposed_in_json():
     r = H(["2♦", "2♠"], ["6♠", "9♥", "4♥"]).to_json()
     assert r["outs"] == 11 and r["outs_winning"] == 2
+
+
+def test_pocket_pair_under_both_pairs_of_a_double_paired_board_never_plays():
+    # Live-session bug: on a board that ALREADY supplies two pairs, the best
+    # two pair is made of the two highest pairs available -- board included.
+    # 5-5 on J-J-9-9-3 is not part of it: the hero plays the board's jacks
+    # and nines with a five for a kicker, and the fives never form a pair in
+    # the winning hand. Counting board RANKS above the pocket pair (J and 9,
+    # so "third_pair") lent it an att 1.2 / def 1.9 it has at no point.
+    r = H(["5♠", "5♥"], ["J♠", "J♣", "9♥", "9♦", "3♥"])
+    assert r.made == "two_pair"  # literally true: the board's J and 9
+    assert r.made_sub["strength_proxy"] == "underpair"
+
+
+def test_pocket_pair_between_the_two_pairs_of_a_double_paired_board_does_play():
+    # Same board, and the rule is not "a double-paired board mutes every
+    # pocket pair": TT beats the lower board pair, so the best hand becomes
+    # jacks and TENS -- the pocket pair is genuinely the second pair.
+    r = H(["T♠", "T♥"], ["J♠", "J♣", "9♥", "9♦", "3♥"])
+    assert r.made == "two_pair"
+    assert r.made_sub["strength_proxy"] == "second_pair"
+
+
+def test_pocket_pair_on_a_singly_paired_board_plays_whatever_its_rank():
+    # The exclusion above is specific to a board holding TWO pairs. With one
+    # board pair the pocket pair always supplies the other half, however low
+    # it is -- 7-7 on J-9-9-3 really is nines and sevens.
+    r = H(["7♥", "7♦"], ["J♠", "9♥", "9♣", "3♦"])
+    assert r.made == "two_pair"
+    assert r.made_sub["strength_proxy"] == "third_pair"

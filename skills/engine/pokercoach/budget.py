@@ -275,8 +275,15 @@ def _pocket_pair_special(cls: str, hc: HandClass, pot_type: str, table: dict) ->
     servie surclassée, seulement 2 outs"). Plus basse que la ligne générique
     de la classe, et pour cause -- une paire servie n'a que 2 outs pour
     s'améliorer, là où une paire qui touche le board peut encore toucher son
-    kicker. Jamais atteinte tant que ces mains sortaient en ``underpair``."""
-    if not hc.made_sub.get("pocket_pair"):
+    kicker. Jamais atteinte tant que ces mains sortaient en ``underpair``.
+
+    Exclut la double paire dont une moitié vient du board : la prémisse "2
+    outs pour s'améliorer" y est fausse, la main EST déjà améliorée. 7-7 sur
+    J-9-9-3 (deux paires, neuf et sept) tombait sinon à def 0.6 -> 0.3 en
+    3BP, pendant que 7-6 sur J-9-9-7 -- strictement plus faible, la même
+    double paire avec un kicker mort au lieu d'une paire servie -- gardait
+    1.5 -> 1.2. Ces mains reprennent la ligne générique de leur proxy."""
+    if not hc.made_sub.get("pocket_pair") or hc.made_sub.get("includes_board_pair"):
         return None
     special = table[cls].get("three_bet_plus_special", {}).get("pocket_pair")
     if special is None:
@@ -285,6 +292,34 @@ def _pocket_pair_special(cls: str, hc: HandClass, pot_type: str, table: dict) ->
     if key is None:
         return None
     return _as_float(special.get("att", 0.0)), _as_float(special.get(key, 0.0))
+
+
+def _board_hit_pair_att(cls: str, hc: HandClass, pot_type: str, table: dict) -> float | None:
+    """L'autre moitié de ``three_bet_plus_special`` : ``board_hit_pair``,
+    l'ATT d'une paire qui TOUCHE le board en 3BP/4BP ("stab <= 30% pot quand
+    l'adversaire montre de la faiblesse, puis check river").
+
+    Restée lettre morte depuis son introduction -- seule la moitié
+    ``pocket_pair`` était câblée. Les nœuds 3BP/4BP de ``third_pair`` et
+    ``fourth_fifth_pair`` n'ont qu'un ``def`` nu, donc ces mains sortaient
+    avec att 0.0 : aucun stab possible en pot relancé, alors que la table en
+    prévoit un explicitement. N'écrase QUE l'ATT (la ligne ne porte pas de
+    ``def``), le DEF restant celui du nœud générique de la classe.
+
+    Ne s'applique pas à la paire servie NUE : elle a sa propre moitié, plus
+    basse, et c'est tout le sens de la distinction du YAML. En revanche la
+    paire servie qui a doublé avec la paire du board la prend bien -- 7-7 sur
+    J-9-9-3 et 7-6 sur J-9-9-7 sont la MÊME main (deux paires, neuf et sept,
+    kicker valet) ; les priver de ce stab au seul motif que l'une vient d'une
+    poche laisserait la première à att 0.0 et la seconde à 1.5."""
+    if hc.made_sub.get("pocket_pair") and not hc.made_sub.get("includes_board_pair"):
+        return None
+    if pot_type not in ("three_bet_pot", "four_bet_pot"):
+        return None
+    special = table[cls].get("three_bet_plus_special", {}).get("board_hit_pair")
+    if special is None:
+        return None
+    return _as_float(special.get("att", 0.0))
 
 
 def _base_pair_family(cls: str, hc: HandClass, pot_type: str, table: dict) -> tuple[float, float]:
@@ -321,8 +356,11 @@ def _base_pair_family(cls: str, hc: HandClass, pot_type: str, table: dict) -> tu
         if leaf is None:
             # Table sans colonne de kicker (3BP/4BP de third/fourth_fifth :
             # un `def` nu, pas d'ATT) -- pas un défaut, la forme du YAML.
-            return 0.0, _as_float(node.get("def", 0.0))
-        return _leaf(leaf)
+            att, deff = 0.0, _as_float(node.get("def", 0.0))
+        else:
+            att, deff = _leaf(leaf)
+        stab_att = _board_hit_pair_att(cls, hc, pot_type, table)
+        return (stab_att if stab_att is not None else att), deff
 
     if cls in ("nuts_high", "second_high"):
         node = table[cls]
@@ -478,7 +516,15 @@ def compute(hc: HandClass, texture: Texture, *, pot_type: str, street: str,
     # classée `third_pair`/`fourth_fifth_pair` plutôt qu'`underpair` : c'est
     # exactement le leak documenté (s'acharner à bluffer en se sentant
     # "commité"), la reclassification ne doit pas le décoiffer.
+    #
+    # Mais une paire servie qui a DOUBLÉ avec la paire du board est une main
+    # de valeur, pas un set-mining raté : 7-7 sur J-9-9-3 a deux paires (neuf
+    # et sept). Sans cette exclusion, G4 lui retirait son ATT face à un
+    # calling station -- bet et raise disparaissaient des actions viables
+    # pour la main qu'on veut justement miser contre ce profil-là, et la
+    # gate anti-leak se retournait contre la value.
     pocket_outranked = (hc.made_sub.get("pocket_pair")
+                        and not hc.made_sub.get("includes_board_pair")
                         and hc.made_sub.get("board_ranks_above", 0) >= 2)
     is_bluff_line = (pair_class in ("trash", "weak_showdown", "underpair")
                      or hc.draw is not None or bool(pocket_outranked))

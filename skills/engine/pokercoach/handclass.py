@@ -303,14 +303,31 @@ def _two_pair_rank_bucket(matched_ranks: list[str], board: list[Card]) -> str:
 _PAIR_FAMILY_BY_RANKS_ABOVE = {1: "second_pair", 2: "third_pair"}
 
 
-def pocket_pair_strength_proxy(pocket_rank: str, board_ranks_sorted: list[str]) -> tuple[str, int]:
+def pocket_pair_strength_proxy(pocket_rank: str, board_ranks_sorted: list[str],
+                                board_rank_counts: dict[str, int] | None = None) -> tuple[str, int]:
     """(classe de force équivalente, nombre de rangs du board au-dessus).
 
     Mesure la seule chose qui décide de la force d'une paire servie face à
     une paire adverse : combien de rangs du board la surclassent. 0 ->
     ``overpair``, tous -> ``underpair`` (le sens littéral de la classe),
-    entre les deux -> deuxième/troisième/quatrième paire."""
+    entre les deux -> deuxième/troisième/quatrième paire.
+
+    ``board_rank_counts`` traite le cas où le board fournit DÉJÀ deux paires
+    (``double_paired``). La meilleure double paire se compose alors des deux
+    plus hautes paires disponibles, board compris : une paire servie sous la
+    PLUS BASSE des deux paires du board n'en fait pas partie et ne joue pas
+    du tout -- 5-5 sur J-J-9-9-3 laisse le héros avec la double paire du
+    board et un 5 pour simple kicker. Compter les rangs du board au-dessus
+    d'elle lui prêterait la force d'une troisième paire (att 1.2 / def 1.9)
+    qu'elle n'a à aucun moment ; ``underpair`` dit ce qu'elle est vraiment.
+    Sur un board à UNE seule paire le cas ne se pose pas : la paire servie
+    fournit toujours la seconde moitié, quel que soit son rang."""
     above = sum(1 for r in board_ranks_sorted if RANKS.index(r) > RANKS.index(pocket_rank))
+    if board_rank_counts is not None:
+        board_pairs = sorted((r for r, n in board_rank_counts.items() if n >= 2),
+                             key=lambda r: -RANKS.index(r))
+        if len(board_pairs) >= 2 and RANKS.index(pocket_rank) < RANKS.index(board_pairs[1]):
+            return "underpair", above
     if above == 0:
         return "overpair", 0
     if above >= len(board_ranks_sorted):
@@ -332,7 +349,8 @@ def _classify_pocket_pair_over_paired_board(hole: list[Card], board: list[Card],
     ``budget.py`` l'interroge à la place de la table ``two_pair``."""
     board_ranks_sorted = _board_unique_ranks_sorted(board)
     pocket_rank = hole[0].rank
-    proxy, above = pocket_pair_strength_proxy(pocket_rank, board_ranks_sorted)
+    proxy, above = pocket_pair_strength_proxy(pocket_rank, board_ranks_sorted,
+                                               texture.board_rank_counts)
     board_pair_rank = max(
         (r for r, n in texture.board_rank_counts.items() if n >= 2),
         key=lambda r: RANKS.index(r),
@@ -367,7 +385,8 @@ def _classify_pair_family(hole: list[Card], board: list[Card], texture: Texture)
         # que le budget prenne la colonne "paire servie" là où le YAML en
         # distingue une, et pour que la gate G4 continue de traiter un
         # set-mining raté comme une ligne de bluff.
-        proxy, above = pocket_pair_strength_proxy(hole[0].rank, board_ranks_sorted)
+        proxy, above = pocket_pair_strength_proxy(hole[0].rank, board_ranks_sorted,
+                                                   board_rank_counts)
         sub = {"pocket_rank": hole[0].rank, "pocket_pair": True, "board_ranks_above": above}
         if proxy not in ("overpair", "underpair"):
             sub["kicker_bucket"] = "tptk"  # une paire servie "kicke" au maximum

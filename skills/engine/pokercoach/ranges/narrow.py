@@ -25,9 +25,13 @@ README, section calibration) — un plancher modeste et délibérément rond,
 suffisant pour que les bornes G3 restent informatives plutôt qu'un
 artefact à équité nulle, pas une fréquence de bluff précise.
 
-Plancher FIXE, pas multiplicatif (régression revue #2) : un combo reçoit le
-poids CONSTANT ``MIN_BLUFF_FLOOR_WEIGHT`` quand il est floored, jamais
-``wc.weight * MIN_BLUFF_FLOOR_WEIGHT``. Comme ``brief._narrow_through_history``
+Plancher FIXE, pas multiplicatif (régression revue #2) : un combo floored
+reçoit ``min(poids d'entrée, MIN_BLUFF_FLOOR_WEIGHT)``, jamais
+``wc.weight * MIN_BLUFF_FLOOR_WEIGHT``. Le ``min`` dit les deux moitiés de
+la règle : un plancher ne s'érode pas rue après rue, et il ne PROMEUT pas
+non plus un combo entré en dessous (assigner la constante nue faisait
+ressortir une range d'entrée ``72o@3%`` à 8%, soit un ``retained_pct`` de
+266.7% sous une note annonçant une baisse). Comme ``brief._narrow_through_history``
 rejoue le narrowing rue par rue en réinjectant le ``range_str`` de sortie
 dans l'entrée de la rue suivante, un poids multiplicatif se compose à
 chaque rue où le combo reste floored (0.08 -> 0.0064 -> 0.000512 mesuré sur
@@ -228,7 +232,16 @@ def narrow(range_str: str, board: list[Card], action: str, *, pot_type: str, str
             # (régression revue #2, cf. docstring du module) : sinon un combo
             # floored sur plusieurs rues consécutives voit son poids s'éroder
             # multiplicativement au lieu de rester à un plancher stable.
-            kept.append(WeightedCombo(combo=wc.combo, weight=MIN_BLUFF_FLOOR_WEIGHT))
+            #
+            # `min` parce qu'un PLANCHER ne promeut pas : assigner la
+            # constante nue remontait à 8% un combo entré plus bas (une range
+            # d'entrée `72o@3%` ressortait à 8%, soit un retained_pct de
+            # 266.7% sous une note qui annonce une baisse). Le combo garde
+            # donc son poids d'entrée quand il est déjà sous le plancher --
+            # et ça n'érode toujours rien rue après rue, puisque `min` d'un
+            # poids déjà stable avec la même constante est idempotent.
+            kept.append(WeightedCombo(combo=wc.combo,
+                                      weight=min(wc.weight, MIN_BLUFF_FLOOR_WEIGHT)))
             kept_at_floor += 1
         # sinon : coupé par une règle structurelle (multiway/exploit) -- rejeté entièrement
 
