@@ -34,13 +34,24 @@ cf. references/03-multiway-generalization.md :
   kicker parmi les rangs de board restants + le kicker lui-même, triés
   descendant. Une bonne approximation, pas une reproduction exacte des
   seuils de l'annexe (non publiés à ce niveau de détail).
-- **Underpair** (paire de poche sous toutes les cartes du board, ne touchant
-  pas le board) : classe ``underpair``, ajoutée à la taxonomie PokerSkill à
-  15 classes (classe trop fréquente pour rester noyée dans
-  ``weak_showdown``). Budgets ATT/DEF encore alignés sur ``weak_showdown``
-  faute de calibration dédiée, cf. ``budget.py``. Sur un board APPARIÉ, une
-  paire servie ne relève jamais de cette classe : elle a réellement deux
-  paires, cf. le point *(b)* ci-dessus.
+- **Paire servie ne touchant aucun rang du board** : placée par sa POSITION
+  parmi les rangs du board (``pocket_pair_strength_proxy``), pas par un
+  binaire au-dessus/en-dessous de la carte haute. Aucun rang au-dessus ->
+  ``overpair`` ; TOUS au-dessus -> ``underpair`` (le sens littéral de la
+  classe) ; entre les deux, elle joue comme la paire simple de rang
+  équivalent -> ``second_pair`` / ``third_pair`` / ``fourth_fifth_pair``
+  (TT sur J-9-6 bat le 9 et le 6 et ne perd que contre un valet : c'est une
+  seconde paire, pas une paire "sous le board"). ``made_sub`` porte
+  ``pocket_pair`` et ``board_ranks_above`` pour que ``budget.py`` prenne la
+  colonne "paire servie" là où le YAML en distingue une (notamment la ligne
+  ``three_bet_plus_special.pocket_pair``, "paire servie surclassée, seulement
+  2 outs"), et pour que la gate G4 continue de traiter un set-mining raté
+  comme une ligne de bluff.
+- **Underpair** : classe ajoutée à la taxonomie PokerSkill à 15 classes
+  (trop fréquente pour rester noyée dans ``weak_showdown``). Budgets ATT/DEF
+  alignés sur ``weak_showdown`` faute de calibration dédiée, cf.
+  ``budget.py``. Sur un board APPARIÉ, une paire servie ne relève jamais de
+  cette classe : elle a réellement deux paires, cf. le point *(b)* ci-dessus.
 - **Tirages** : classification simplifiée par seuils monotones (rang de la
   couleur, ouverture de la quinte, somme des rangs pour les surcartes) —
   pas de détection des combinaisons "backdoor". Les ``outs`` restent EXACTS
@@ -346,10 +357,21 @@ def _classify_pair_family(hole: list[Card], board: list[Card], texture: Texture)
     board_rank_counts = texture.board_rank_counts
 
     if hole[0].rank == hole[1].rank and board_rank_counts.get(hole[0].rank, 0) == 0:
-        pocket_rank_idx = hole[0].rank_index
-        if board and pocket_rank_idx > RANKS.index(board_ranks_sorted[0]):
-            return "overpair", {"pocket_rank": hole[0].rank}, 1.0
-        return "underpair", {"pocket_rank": hole[0].rank}, 1.0
+        # Une paire servie qui ne touche pas le board se situe PAR SA POSITION
+        # parmi les rangs du board, pas par un binaire au-dessus/en-dessous de
+        # la carte haute : `overpair` (aucun rang au-dessus), `underpair` (tous
+        # au-dessus -- le sens littéral de la classe), et entre les deux elle
+        # joue comme la paire simple de rang équivalent (TT sur J-9-6 bat le 9
+        # et le 6, ne perd que contre un valet : c'est une seconde paire, pas
+        # une paire "sous le board"). `pocket_pair` reste dans `made_sub` pour
+        # que le budget prenne la colonne "paire servie" là où le YAML en
+        # distingue une, et pour que la gate G4 continue de traiter un
+        # set-mining raté comme une ligne de bluff.
+        proxy, above = pocket_pair_strength_proxy(hole[0].rank, board_ranks_sorted)
+        sub = {"pocket_rank": hole[0].rank, "pocket_pair": True, "board_ranks_above": above}
+        if proxy not in ("overpair", "underpair"):
+            sub["kicker_bucket"] = "tptk"  # une paire servie "kicke" au maximum
+        return proxy, sub, 1.0
 
     matched = [c for c in hole if board_rank_counts.get(c.rank, 0) >= 1]
     if not matched:
@@ -376,6 +398,8 @@ def _classify_pair_family(hole: list[Card], board: list[Card], texture: Texture)
     other = [c for c in hole if c is not paired_card]
     kicker_rank_idx = other[0].rank_index if other else -1
     is_pocket_pair = hole[0].rank == hole[1].rank
+    # Même grandeur que pour une paire servie (nombre de rangs du board
+    # au-dessus) : c'est elle qui choisit la colonne `fourth`/`fifth` du budget.
 
     remaining_board = [RANKS.index(r) for r in board_ranks_sorted if r != paired_card.rank]
     combined = sorted(set(remaining_board + ([kicker_rank_idx] if not is_pocket_pair else [])), reverse=True)
@@ -392,7 +416,8 @@ def _classify_pair_family(hole: list[Card], board: list[Card], texture: Texture)
         elif idx + 1 < len(combined) and kicker_rank_idx - combined[idx + 1] == 1:
             distance = 0.15
 
-    sub = {"kicker_bucket": kicker_bucket, "pocket_pair": is_pocket_pair}
+    sub = {"kicker_bucket": kicker_bucket, "pocket_pair": is_pocket_pair,
+           "board_ranks_above": position}
     return category, sub, distance
 
 

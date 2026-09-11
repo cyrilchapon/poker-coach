@@ -98,10 +98,36 @@ def test_pocket_pair_over_a_paired_board_stays_an_overpair():
     assert r.made == "overpair"
 
 
-def test_pocket_pair_on_an_unpaired_board_is_untouched():
-    # The new branch only fires when the BOARD supplies the second pair.
+def test_pocket_pair_on_an_unpaired_board_is_not_two_pair():
+    # The two_pair branch only fires when the BOARD supplies the second pair.
     r = H(["T♠", "T♥"], ["J♠", "9♦", "6♣"])
-    assert r.made == "underpair"
+    assert r.made != "two_pair"
+    assert "includes_board_pair" not in r.made_sub
+
+
+def test_pocket_pair_between_board_ranks_is_placed_by_its_position():
+    # A pocket pair that touches no board rank used to be a binary: above the
+    # top board card -> overpair, anything else -> underpair. But TT on J-9-6
+    # beats the nine and the six and only trails the jack -- that is a second
+    # pair, not a pair "below the board" (the literal meaning of underpair).
+    second = H(["T♠", "T♥"], ["J♠", "9♦", "6♣"])
+    assert second.made == "second_pair"
+    assert second.made_sub["board_ranks_above"] == 1
+    assert second.made_sub["pocket_pair"] is True
+
+    third = H(["5♠", "5♥"], ["K♦", "9♣", "4♥"])
+    assert third.made == "third_pair"
+    assert third.made_sub["board_ranks_above"] == 2
+
+    fifth = H(["3♠", "3♥"], ["A♦", "K♣", "9♥", "7♦", "2♣"])
+    assert fifth.made == "fourth_fifth_pair"
+    assert fifth.made_sub["board_ranks_above"] == 4
+
+
+def test_pocket_pair_above_the_whole_board_is_still_an_overpair():
+    r = H(["Q♠", "Q♥"], ["9♦", "6♣", "2♥"])
+    assert r.made == "overpair"
+    assert r.made_sub["board_ranks_above"] == 0
 
 
 def test_hero_pairing_an_already_paired_board_is_still_a_plain_pair():
@@ -144,13 +170,15 @@ def test_second_and_third_pair():
 
 
 def test_underpair_has_its_own_class():
-    # Regression (live-session bug report #4) : an underpair (pocket pair
-    # strictly below every board card) used to fall into weak_showdown, with
-    # the engine's own note flagging it as "not covered by the taxonomy" --
-    # frequent enough (any failed set-mine) to deserve its own class.
-    r = H(["5♠", "5♥"], ["9♦", "8♣", "2♥"])
+    # An underpair (pocket pair strictly below every board card) used to fall
+    # into weak_showdown, with the engine's own note flagging it as "not
+    # covered by the taxonomy" -- frequent enough (any failed set-mine) to
+    # deserve its own class. Board deliberately has NO card below the pocket
+    # pair: that is what the class means.
+    r = H(["5♠", "5♥"], ["9♦", "8♣", "7♥"])
     assert r.made == "underpair"
-    assert r.made_sub == {"pocket_rank": "5"}
+    assert r.made_sub["pocket_rank"] == "5"
+    assert r.made_sub["board_ranks_above"] == 3
 
 
 def test_high_card_buckets():

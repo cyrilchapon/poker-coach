@@ -246,6 +246,47 @@ def _base_made_hands(hc: HandClass, pot_type: str, texture: Texture) -> tuple[fl
     return 0.0, 0.0
 
 
+def _pair_kicker_keys(cls: str, sub: dict) -> tuple[str, ...]:
+    """Colonnes de kicker à essayer, dans l'ordre, pour ``cls``.
+
+    Les tables ne nomment pas cette colonne pareil d'une classe à l'autre :
+    ``second_pair`` a ``pocket_or_top_kicker`` en SRP mais ``pocket`` et
+    ``top_kicker`` SÉPARÉS en 3BP/4BP, ``third_pair`` a
+    ``top_kicker_or_pocket``, et ``fourth_fifth_pair`` n'a pas de colonne de
+    kicker du tout mais ``fourth``/``fifth``. Un mapping à une seule
+    orthographe (``tptk -> pocket_or_top_kicker``) tombait donc dans le repli
+    ``other`` pour third_pair et pour les pots relancés -- et dans RIEN du tout
+    pour fourth_fifth_pair, dont le nœud SRP n'a ni cette clé ni ``other``
+    (budget att=0/def=0 rendu au lieu de 0.8/1.8). On essaie toutes les
+    orthographes, paire servie d'abord quand les deux colonnes coexistent."""
+    if cls == "fourth_fifth_pair":
+        return ("fifth",) if sub.get("board_ranks_above", 3) >= 4 else ("fourth",)
+    kb = sub.get("kicker_bucket", "other")
+    if kb == "tptk":
+        if sub.get("pocket_pair"):
+            return ("pocket", "pocket_or_top_kicker", "top_kicker_or_pocket", "top_kicker")
+        return ("top_kicker", "pocket_or_top_kicker", "top_kicker_or_pocket", "pocket")
+    return {"tpsk": ("k2",), "k3": ("k3",)}.get(kb, ())
+
+
+def _pocket_pair_special(cls: str, hc: HandClass, pot_type: str, table: dict) -> tuple[float, float] | None:
+    """Ligne ``three_bet_plus_special.pocket_pair`` de ``third_pair`` /
+    ``fourth_fifth_pair`` : la paire SERVIE surclassée en 3BP/4BP ("paire
+    servie surclassée, seulement 2 outs"). Plus basse que la ligne générique
+    de la classe, et pour cause -- une paire servie n'a que 2 outs pour
+    s'améliorer, là où une paire qui touche le board peut encore toucher son
+    kicker. Jamais atteinte tant que ces mains sortaient en ``underpair``."""
+    if not hc.made_sub.get("pocket_pair"):
+        return None
+    special = table[cls].get("three_bet_plus_special", {}).get("pocket_pair")
+    if special is None:
+        return None
+    key = {"three_bet_pot": "def_3bp", "four_bet_pot": "def_4bp"}.get(pot_type)
+    if key is None:
+        return None
+    return _as_float(special.get("att", 0.0)), _as_float(special.get(key, 0.0))
+
+
 def _base_pair_family(cls: str, hc: HandClass, pot_type: str, table: dict) -> tuple[float, float]:
     """Baseline d'une classe de la famille "paire simple". ``cls`` est passé
     explicitement (et non lu dans ``hc.made``) pour que la double paire dont
@@ -264,14 +305,24 @@ def _base_pair_family(cls: str, hc: HandClass, pot_type: str, table: dict) -> tu
         return _leaf(leaf)
 
     if cls in ("second_pair", "third_pair", "fourth_fifth_pair"):
+        special = _pocket_pair_special(cls, hc, pot_type, table)
+        if special is not None:
+            return special
         node = table[cls]["by_pot_type"].get(pot_type)
         if node is None:
             node = table[cls]["by_pot_type"].get("srp") or table[cls]["by_pot_type"].get("srp_limp", {})
-        kb = hc.made_sub.get("kicker_bucket", "other")
-        key_map = {"tptk": "pocket_or_top_kicker", "tpsk": "k2", "k3": "k3"}
-        key = key_map.get(kb, "other")
-        leaf = node.get(key) or node.get("other") or {"att": 0, "def": node.get("def", 0)}
-        return _leaf(leaf) if isinstance(leaf, dict) else (0.0, _as_float(leaf))
+        leaf = None
+        for key in _pair_kicker_keys(cls, hc.made_sub):
+            if isinstance(node.get(key), dict):
+                leaf = node[key]
+                break
+        if leaf is None and isinstance(node.get("other"), dict):
+            leaf = node["other"]
+        if leaf is None:
+            # Table sans colonne de kicker (3BP/4BP de third/fourth_fifth :
+            # un `def` nu, pas d'ATT) -- pas un défaut, la forme du YAML.
+            return 0.0, _as_float(node.get("def", 0.0))
+        return _leaf(leaf)
 
     if cls in ("nuts_high", "second_high"):
         node = table[cls]
@@ -422,7 +473,15 @@ def compute(hc: HandClass, texture: Texture, *, pot_type: str, street: str,
 
     att, deff, mw_removed = _apply_multiway(att, deff, hc.made, hc.draw, n_opponents_active)
 
-    is_bluff_line = pair_class in ("trash", "weak_showdown", "underpair") or hc.draw is not None
+    # Une paire servie surclassée par 2+ rangs du board (le set-mining raté)
+    # reste une ligne de bluff pour la gate G4, même maintenant qu'elle est
+    # classée `third_pair`/`fourth_fifth_pair` plutôt qu'`underpair` : c'est
+    # exactement le leak documenté (s'acharner à bluffer en se sentant
+    # "commité"), la reclassification ne doit pas le décoiffer.
+    pocket_outranked = (hc.made_sub.get("pocket_pair")
+                        and hc.made_sub.get("board_ranks_above", 0) >= 2)
+    is_bluff_line = (pair_class in ("trash", "weak_showdown", "underpair")
+                     or hc.draw is not None or bool(pocket_outranked))
     street_index = STREET_INDEX.get(street, 0)
     att, exploit_removed, exploit_notes = _apply_exploit_gate(
         att, hc.made, hc.draw, villain_archetype, is_bluff_line, street_index)

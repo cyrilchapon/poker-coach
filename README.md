@@ -664,6 +664,43 @@ problem with the conversational layer.
   distorts the box borders, which aren't padded, so that is a documented
   limit rather than a supported mode).
 
+- **A pocket pair touching no board rank was placed by a binary, not by its
+  position.** Above the top board card → `overpair`, anything else →
+  `underpair`. So TT on J-9-6 came back as an `underpair` even though it
+  beats the nine and the six and only trails the jack — "strictly below every
+  board card" is what the class literally means. `_classify_pair_family` now
+  routes through the same `pocket_pair_strength_proxy()` the paired-board
+  case uses: no rank above → `overpair`, all of them → `underpair`, anything
+  between → `second_pair` / `third_pair` / `fourth_fifth_pair`, carrying
+  `made_sub.pocket_pair` and `board_ranks_above`. Measured on TT / J-9-6:
+  att 0 → 1.8, def 0.8 → 2.8.
+
+  That path turned out to mis-key its own budget tables in three places, all
+  pre-existing and all now reachable far more often, so they went with it.
+  `att-def-budgets.yaml` does not name the kicker column the same way from
+  one class to the next — `second_pair` has `pocket_or_top_kicker` in SRP but
+  `pocket` and `top_kicker` *split* in raised pots, `third_pair` has
+  `top_kicker_or_pocket`, and `fourth_fifth_pair` has no kicker column at all
+  but `fourth`/`fifth`. A single-spelling map (`tptk -> pocket_or_top_kicker`)
+  silently fell through to the `other` row for third pairs and for raised
+  pots, and for fourth/fifth pairs fell through `other` too — landing on a
+  bare `{"att": 0, "def": node.get("def", 0)}` against a node with no `def`
+  key, i.e. **att 0 / def 0 for every fourth and fifth pair in a
+  single-raised pot**. `_pair_kicker_keys()` now tries every spelling the
+  YAML uses, pocket column first when both exist separately. And
+  `three_bet_plus_special.pocket_pair` ("paire servie surclassée, seulement 2
+  outs" — deliberately lower than the class's generic 3BP row) was dead data
+  while these hands were `underpair`; it is now wired for `third_pair` and
+  `fourth_fifth_pair`.
+
+  One deliberate carve-out: the G4 exploit gate keys off "is this a bluff
+  line?", which listed `underpair`. Reclassifying a failed set-mine as
+  `third_pair` would have quietly narrowed G4's cover of the user's
+  documented leak (barrelling on while feeling committed), so a pocket pair
+  outranked by 2+ board ranks stays a bluff line regardless of its class. A
+  third pair the hero actually made with one of their own cards does not —
+  same as before.
+
 - **The conversational layer drifted from the engine without saying so.** In
   session it justified a preflop recommendation with a two pair the hero
   only made on the flop — arguing from a hand strength that did not exist at

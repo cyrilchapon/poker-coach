@@ -16,7 +16,7 @@ def test_not_facing_a_bet_offers_check_bet_not_call_fold():
     # of whether there was actually a bet to call -- an underpair with no
     # ATT budget got told "call" was viable (gated by DEF, which doesn't
     # apply when checking is free) instead of "check".
-    hc, tex = hc_and_texture(["8♠", "8♥"], ["K♦", "7♣", "2♥"])  # underpair, weak_showdown
+    hc, tex = hc_and_texture(["8♠", "8♥"], ["K♦", "T♣", "9♥"])  # underpair, weak_showdown
     b = compute(hc, tex, pot_type="srp", street="flop", n_opponents_active=2,
                 pressure_spent=0.0, pressure_faced=0.0, facing_bet=False)
     assert b.viable_actions == ["check"]
@@ -203,3 +203,86 @@ def test_pocket_pair_below_a_paired_board_keeps_an_underpair_budget():
                 pressure_spent=0.0, pressure_faced=0.0)
     assert b.att_base == 0.0
     assert b.def_base == pytest.approx(0.8)  # weak_showdown baseline, as for an underpair
+
+
+# --- paire servie non connectée : placée par sa position au board -----------
+
+def test_pocket_pair_between_board_ranks_gets_its_equivalent_pair_budget():
+    # TT on J-9-6 used to be `underpair` -> weak_showdown (att 0 / def 0.8),
+    # although it beats the nine and the six. It is a second pair and takes
+    # the second-pair line, pocket-pair column.
+    hc, tex = hc_and_texture(["T♠", "T♥"], ["J♠", "9♦", "6♣"])
+    assert hc.made == "second_pair"
+    b = compute(hc, tex, pot_type="srp", street="flop", n_opponents_active=1,
+                pressure_spent=0.0, pressure_faced=0.0)
+    assert (b.att_base, b.def_base) == pytest.approx((1.8, 2.8))
+
+
+def test_a_true_underpair_keeps_the_weak_showdown_baseline():
+    hc, tex = hc_and_texture(["5♠", "5♥"], ["9♦", "8♣", "7♥"])
+    assert hc.made == "underpair"
+    b = compute(hc, tex, pot_type="srp", street="flop", n_opponents_active=1,
+                pressure_spent=0.0, pressure_faced=0.0)
+    assert (b.att_base, b.def_base) == pytest.approx((0.0, 0.8))
+
+
+def test_outranked_pocket_pair_reaches_the_three_bet_plus_special_row():
+    # `third_pair.three_bet_plus_special.pocket_pair` ("paire servie
+    # surclassée, seulement 2 outs") was unreachable while these hands were
+    # classified `underpair`. It is deliberately lower than the class's
+    # generic 3BP row (def 1.5): a pocket pair has 2 outs, a pair that hit the
+    # board can still improve its kicker.
+    hc, tex = hc_and_texture(["5♠", "5♥"], ["K♦", "9♣", "4♥"])
+    b = compute(hc, tex, pot_type="three_bet_pot", street="flop", n_opponents_active=1,
+                pressure_spent=0.0, pressure_faced=0.0)
+    assert (b.att_base, b.def_base) == pytest.approx((0.0, 0.6))
+
+
+def test_g4_still_treats_a_failed_set_mine_as_a_bluff_line():
+    # The reclassification must not quietly narrow G4's cover of the
+    # documented leak (barrelling on while feeling committed): a pocket pair
+    # outranked by 2+ board ranks stays a bluff line even though it is now
+    # `third_pair` rather than `underpair`.
+    hc, tex = hc_and_texture(["5♠", "5♥"], ["K♦", "9♣", "4♥", "2♠"])
+    b = compute(hc, tex, pot_type="srp", street="turn", n_opponents_active=1,
+                pressure_spent=0.0, pressure_faced=0.0, villain_archetype="fish")
+    assert b.att_remaining == 0.0
+    assert any("bluff_multi_street_blocked" in n for n in b.notes)
+    # A real third pair (hero's own card hit the board) is not a bluff line.
+    hc, tex = hc_and_texture(["4♠", "A♥"], ["K♦", "9♣", "4♥", "2♠"])
+    b = compute(hc, tex, pot_type="srp", street="turn", n_opponents_active=1,
+                pressure_spent=0.0, pressure_faced=0.0, villain_archetype="fish")
+    assert b.att_remaining > 0
+
+
+# --- colonnes de kicker : toutes les orthographes du YAML ------------------
+
+def test_fourth_and_fifth_pair_reach_their_own_rows():
+    # Regression: `fourth_fifth_pair`'s SRP node is keyed `fourth`/`fifth` and
+    # has no `other` row, so the single-spelling kicker map fell all the way
+    # through to a bare `{"att": 0, "def": node.get("def", 0)}` -- returning
+    # att 0 / def 0 for every fourth and fifth pair in a single-raised pot.
+    fourth, tex4 = hc_and_texture(["2♠", "K♥"], ["9♦", "8♣", "5♥", "2♦"])
+    b = compute(fourth, tex4, pot_type="srp", street="turn", n_opponents_active=1,
+                pressure_spent=0.0, pressure_faced=0.0)
+    assert (b.att_base, b.def_base) == pytest.approx((0.8, 1.8))
+
+    fifth, tex5 = hc_and_texture(["2♠", "K♥"], ["9♦", "8♣", "5♥", "3♦", "2♣"])
+    b = compute(fifth, tex5, pot_type="srp", street="river", n_opponents_active=1,
+                pressure_spent=0.0, pressure_faced=0.0)
+    assert (b.att_base, b.def_base) == pytest.approx((0.5, 1.5))
+
+
+def test_top_kicker_rows_are_found_under_every_spelling_the_yaml_uses():
+    # `third_pair` names the column `top_kicker_or_pocket` and `second_pair`
+    # splits it into `pocket` / `top_kicker` in raised pots -- the old map only
+    # knew `pocket_or_top_kicker`, so both silently took the `other` row.
+    third, tex = hc_and_texture(["4♠", "A♥"], ["K♦", "9♣", "4♥"])
+    b = compute(third, tex, pot_type="srp", street="flop", n_opponents_active=1,
+                pressure_spent=0.0, pressure_faced=0.0)
+    assert (b.att_base, b.def_base) == pytest.approx((1.2, 2.2))  # was the "other" row (1.0/2.0)
+
+    second, tex = hc_and_texture(["8♠", "A♥"], ["K♦", "8♣", "4♥"])
+    b = compute(second, tex, pot_type="three_bet_pot", street="flop", n_opponents_active=1,
+                pressure_spent=0.0, pressure_faced=0.0)
+    assert (b.att_base, b.def_base) == pytest.approx((1.5, 2.3))  # `top_kicker`, not `other`
