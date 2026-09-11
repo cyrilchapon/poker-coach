@@ -1,6 +1,6 @@
 ---
 name: decision-factors
-description: Checklist des facteurs qualitatifs qui complètent l'équité et le budget ATT/DEF (position, implied/reverse implied odds, SPR, fold equity/exploitabilité, joueurs restants à parler) pour une analyse de décision poker plus complète. Chargée automatiquement par le gate G5 de `pc brief` — seules les décisions qui atteignent la zone grise en ont besoin, les autres sont déjà tranchées par le moteur.
+description: Checklist des facteurs qualitatifs qui complètent l'équité et le budget ATT/DEF (position, implied/reverse implied odds, SPR, fold equity/exploitabilité, joueurs restants à parler) pour une analyse de décision poker plus complète. Chargée automatiquement par le gate G5 de `pc brief`, où ils tranchent ; leur poids sur les gates plus fermes suit le champ `confidence` de la sortie.
 ---
 
 # Decision Factors
@@ -19,9 +19,17 @@ Dans la sortie de `pc narrow`, `retained_pct` est une part de **poids**, pas un 
 
 ## Principe
 
-Le moteur (`pc brief`) répond à « qui gagne le plus souvent, et le budget ATT/DEF autorise-t-il encore l'action ». Une vraie décision de poker dépend aussi de facteurs qualitatifs qu'il ne modélise pas complètement. Ces 5 facteurs s'appliquent **en plus** du verdict du moteur, après l'avoir fait calculer, et seulement en G5 (zone grise) — sur G0-G4, le moteur a déjà tranché.
+Le moteur (`pc brief`) répond à « qui gagne le plus souvent, et le budget ATT/DEF autorise-t-il encore l'action ». Une vraie décision de poker dépend aussi de facteurs qualitatifs qu'il ne modélise pas complètement. Ces 5 facteurs s'appliquent **en plus** du verdict du moteur, jamais à sa place, et toujours après l'avoir fait calculer.
 
-S'ils conduisent à s'écarter du verdict, l'écart doit être dit explicitement, chiffre du moteur à l'appui, avec le facteur qui le motive (voir `live-session`, « Dévier du moteur : permis, jamais en silence »). Jamais une conclusion qui contredit le moteur sans le dire, ni un de ces facteurs invoqué avant d'avoir le verdict.
+Leur poids face au verdict n'est pas binaire, et ne se lit pas au numéro du gate mais au champ `confidence` de la sortie :
+
+- `forced` — ils n'ouvrent pas le verdict. Ils servent à l'expliquer ; s'en écarter est rarissime et demande un fait de table dur.
+- `strong` — ils peuvent l'infléchir (sizing, ligne, taille du pot visé), et ne le renversent que si l'un d'eux contredit précisément ce qui a tranché.
+- `grey` (G5) — ce sont eux qui tranchent, et cette skill est chargée pour ça.
+
+Un gate précoce ne dispense donc jamais de lire la table : il relève la barre de ce qu'il faut pour s'en écarter, il ne la ferme pas. Le détail de cette progression est dans `live-session`, « Dévier du moteur ».
+
+S'ils conduisent à s'écarter du verdict, l'écart doit être dit explicitement, chiffre du moteur à l'appui, avec le facteur qui le motive. Jamais une conclusion qui contredit le moteur sans le dire, ni un de ces facteurs invoqué avant d'avoir le verdict.
 
 ## 1. Position (IP / OOP)
 
@@ -45,6 +53,8 @@ Déjà branché sur le budget : `pc budget --villain-archetype fish` applique la
 
 ## Comment l'utiliser
 
-Le gate G5 de `pc brief` CHARGE cette skill : ce n'est pas une ressource « disponible si besoin ». Sur un gate G0-G4, ces 5 facteurs ne sont pas nécessaires (le moteur les a déjà pris en compte via le budget et l'ajustement multiway) ; seul G5 justifie de les dérouler.
+Le gate G5 de `pc brief` CHARGE cette skill : ce n'est pas une ressource « disponible si besoin ». Sur un gate G0-G4, ne pas les dérouler point par point — le moteur en a déjà intégré une part (le budget porte la fold equity, l'ajustement multiway porte les joueurs derrière) et il a rendu un verdict.
+
+Les garder en tête reste dû : c'est ce qui permet de repérer qu'un verdict « clair » repose sur une hypothèse que la table contredit. Dans ce cas, la suite n'est pas de conclure contre lui de tête, c'est de reposer la question au moteur au niveau de précision qui répond à l'intuition (`live-session`, « Orienter les appels, pas subir le défaut ») — et, si l'écart survit au recalcul, de l'annoncer selon le barème de `confidence` ci-dessus.
 
 Ne pas transformer chaque analyse en liste exhaustive des 5 points — les mentionner seulement quand ils changent réellement la conclusion.

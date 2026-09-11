@@ -11,7 +11,7 @@ Même posture qu'en `live-session` (voir cette skill pour la version détaillée
 
 1. **Consulter avant de parler.** Force de main, outs, équité, cotes, range adverse, verdict : toujours l'outil (`pc hand`, `pc equity`, `pc narrow`, `pc brief`), jamais une évaluation de tête, même sur un cas « évident ».
 2. **Dater chaque affirmation par sa rue.** Décrire la main telle qu'elle était au moment de la décision commentée, jamais telle qu'elle a fini — ne jamais justifier un call préflop par une paire touchée au flop, ni juger une décision par le résultat du showdown. Le `pc brief` qui appuie un commentaire est celui de la rue commentée.
-3. **Dévier du moteur : permis, jamais en silence.** Faire calculer d'abord, puis nommer la raison contextuelle (historique, dynamique de table, profil observé, sizing atypique) et annoncer l'écart explicitement : « le moteur dit X avec tel chiffre ; ici je pencherais pour Y parce que… ». Une déviation non annoncée est un bug.
+3. **Dévier du moteur : permis, jamais en silence, d'autant plus rare qu'il est sûr de lui.** Faire calculer d'abord, puis nommer la raison contextuelle (historique, dynamique de table, profil observé, sizing atypique) et annoncer l'écart explicitement : « le moteur dit X avec tel chiffre ; ici je pencherais pour Y parce que… ». Une déviation non annoncée est un bug. La fréquence acceptable de l'écart suit le champ `confidence` de la sortie, pas le numéro du gate : rarissime sur `forced`, possible mais proportionnée sur `strong`, c'est ta décision sur `grey` (G5). Barème détaillé dans `live-session`.
 
 En zone grise (gate `G5`), aller chercher le niveau de précision au-dessus (`pc brief --depth full`, `pc narrow`, `pc equity` contre une range que tu écris) plutôt que de conclure au feeling.
 
@@ -23,7 +23,7 @@ Reconstruire l'état de la main en `hand.json` (voir le schéma dans `docs/brief
 scripts/pc brief --hand hand.json [--villain-archetype X]
 ```
 
-`pc brief` enchaîne lui-même range narrowing → équité → classification de main → sizing → gates, dans le bon ordre : ne pas rejouer cette chaîne outil par outil. La verbosité de la réponse suit le gate retourné (`verbosity` dans la sortie) : une ligne si `G0`/`G1`, le chiffre qui tranche si `G3`, l'analyse complète avec `decision-factors` chargé seulement si `G5`. Ne pas produire une analyse en 6 points sur une décision que le moteur a déjà tranchée en G0-G2.
+`pc brief` enchaîne lui-même range narrowing → équité → classification de main → sizing → gates, dans le bon ordre : ne pas rejouer cette chaîne outil par outil. La verbosité de la réponse suit le gate retourné (`verbosity` dans la sortie) : une ligne si `G0`/`G1`, le chiffre qui tranche si `G3`, l'analyse complète avec `decision-factors` chargé si `G5`. Ne pas produire une analyse en 6 points sur une décision que le moteur a déjà tranchée en G0-G2. C'est un réglage de longueur, pas un droit de parole : ce que tu peux dire contre le verdict dépend de `confidence` (règle 3), pas de `verbosity`.
 
 ## Formats d'entrée supportés
 

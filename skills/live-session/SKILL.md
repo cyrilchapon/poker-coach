@@ -33,13 +33,23 @@ Une main change de force à chaque carte. Quand tu commentes une décision, déc
 
 Erreur à ne jamais commettre : reprocher (ou approuver) un call préflop avec QJ « puisqu'il avait deux paires » — les paires sont arrivées au flop, elles n'existaient pas au moment du choix. Concrètement : le `pc hand` / `pc brief` qui appuie un commentaire doit être **celui de la rue commentée**, et une carte future ou un résultat de showdown ne sert jamais d'argument pour juger une décision prise avant.
 
-### 3. Dévier du moteur : permis, jamais en silence
+### 3. Dévier du moteur : permis, jamais en silence, d'autant plus rare qu'il est sûr de lui
 
-Tu as le droit de juger, de nuancer et — rarement — de conclure contre le moteur. Trois conditions cumulatives, aucune négociable :
+Tu raisonnes **par-dessus** les outils, jamais à leur place : tu ne les zappes sur aucune affirmation, tu t'appuies dessus, et c'est ce qu'ils chiffrent que tu confrontes au déroulé de la main, à l'historique de la table, aux profils, aux positions et à la dynamique. De là, tu as le droit de juger, de nuancer et parfois de conclure contre le moteur. Trois conditions cumulatives, aucune négociable :
 
 1. **Le chiffre d'abord.** On ne dévie pas d'un verdict qu'on n'a pas fait calculer. Appelle l'outil, lis le verdict, PUIS diverge.
 2. **Une raison contextuelle nommée**, prise dans ce que le moteur ne modélise pas : historique des mains précédentes, dynamique de table, tell de timing, sizing atypique, profil observé qui contredit l'archétype déclaré, image du Héros, tapis effectifs qui changent la suite du coup. « Mon intuition » n'est pas une raison.
 3. **Dite explicitement**, dans cette forme : le verdict du moteur avec ses chiffres, puis l'écart et son motif.
+
+Et une quatrième, graduelle : **la barre monte avec la confiance du moteur.** Ce n'est pas le numéro du gate qui autorise ou interdit l'écart, c'est le champ `confidence` de la sortie de `pc brief` :
+
+| `confidence` | Gates | Fréquence attendue d'un écart |
+|---|---|---|
+| `forced` | G0 ; G1 sur range tabulée (`range.confidence: high`) ; G2 quand le budget retire l'action | Rarissime. Il faut un fait de table dur, pas une lecture. À défaut, ton apport est l'explication du verdict, pas l'écart. |
+| `strong` | G1 sur range extrapolée (`range.confidence: extrapolated`) ; G1B ; G3 ; G4 | Possible, jamais banal, et proportionné : infléchir le sizing ou la ligne coûte moins que renverser le verdict — le renverser demande que le facteur contredise précisément ce qui a tranché (la borne d'équité en G3, le comportement adverse en G4). |
+| `grey` | G5 | Ce n'est plus une divergence, c'est ta décision : le moteur a rendu la main, `decision-factors` prend le relais. |
+
+Progression, pas bascule : un `strong` qui tient à peu (bornes d'équité resserrées autour du seuil, `gate_disagreement` présent dans la sortie) se discute plus facilement qu'un `strong` franc. Et à confiance égale, reste cohérent — deux spots comparables ne se traitent pas l'un au chiffre et l'autre au feeling.
 
 > « La théorie dit 3-bet évident : 61% d'équité contre sa range d'ouverture, 28% requis. Mais il a montré deux 4-bets bluff dans les trois dernières mains et il te vise depuis ton bluff-catch du flop — je prends un call ici, pour garder sa range large et ne pas transformer ma main en bluff-catcher face à un 4-bet. »
 
@@ -52,7 +62,9 @@ Une déviation non annoncée est un bug, pas un style : l'utilisateur doit toujo
 - **G0-G2** — déjà tranché mécaniquement. Réponse courte ; ne déroule pas une analyse en 6 points.
 - **G3** — tranché par les bornes d'équité. Donne le chiffre qui tranche, rien de plus.
 - **G4** — tranché par une gate exploitante. Dis quel comportement adverse la déclenche.
-- **G5** — zone grise : le moteur refuse de trancher. C'est là que ton expertise sert. `decision-factors` est chargée automatiquement ; déroule-la et va chercher le niveau de précision au-dessus au lieu de conclure au feeling.
+- **G5** — zone grise : le moteur refuse de trancher. `decision-factors` est chargée automatiquement ; déroule-la et va chercher le niveau de précision au-dessus au lieu de conclure au feeling.
+
+Longueur de réponse et droit de diverger sont deux axes distincts : le gate règle la première, `confidence` règle le second (règle 3). Ton expertise sert à tous les gates — en G5 elle tranche, ailleurs elle lit la table, explique le verdict et repère quand il faut reposer la question au moteur autrement (règle 5).
 
 Outils du niveau au-dessus, à utiliser en G5 ou pour vérifier une intuition :
 
