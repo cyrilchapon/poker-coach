@@ -823,7 +823,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--iterations", type=int, default=20000)
     p.set_defaults(func=cmd_equity)
 
-    p = sub.add_parser("narrow", help="range adverse après filtrage par action observée")
+    p = sub.add_parser(
+        "narrow", help="range adverse après filtrage par action observée",
+        description="Filtre une range adverse aux combos dont le budget ATT/DEF rend l'action "
+                    "observée viable. `retained_pct` est une part de POIDS, pas un compte de "
+                    "combos : un combo non viable par épuisement de budget est retenu au poids "
+                    "plancher (anti-polarisation), pas supprimé -- d'où un `remaining_combos` qui "
+                    "peut rester égal à `original_combos` pendant que `retained_pct` chute. Les "
+                    "trois populations sont comptées séparément dans la sortie "
+                    "(combos_kept_full_weight / combos_kept_at_bluff_floor / combos_removed), et "
+                    "`note` rappelle laquelle porte le filtrage. --action fold et check ne "
+                    "filtrent pas du tout (filters_combos=false).")
     hand_arg(p)
     p.add_argument("--action", required=True, choices=["fold", "check", "call", "bet", "raise"])
     p.add_argument("--range", default=None, help="range de départ (défaut : range générique large)")

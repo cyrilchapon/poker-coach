@@ -5,7 +5,7 @@ Reprend les conventions validées de la v1
 explicitement (cf. PROMPT.md §8/§9 et 02-architecture-v2.md "Ce qui vient de
 la v1 et ne doit pas être perdu") :
 
-- unité de stack : symbole ``𝄫`` (remplace "bb") ;
+- unité de stack : suffixe ASCII ``bb`` ;
 - identité + stack de chaque siège À L'EXTÉRIEUR du rectangle ;
 - action (sans timer) + montant À L'INTÉRIEUR (« sur la table »), alignés du
   côté du joueur — vrai pour les sièges verticaux ET pour le(s) siège(s)
@@ -71,9 +71,37 @@ référence dit le contraire — le board/pot reste malgré tout visuellement
 centré puisque l'écart n'est que d'une paire).
 
 Montants (``bb()``) : jamais de ``.0`` superflu — un montant entier
-s'affiche sans décimale (``1𝄫``), un montant non entier garde sa décimale
-(``21.5𝄫``). Règle uniforme, appliquée aux stacks comme aux montants
+s'affiche sans décimale (``1bb``), un montant non entier garde sa décimale
+(``21.5bb``). Règle uniforme, appliquée aux stacks comme aux montants
 d'action.
+
+Largeur d'affichage, pas nombre de points de code (correction d'alignement) :
+tous les paddings passent par ``display_width``/``_fit`` (``_c``/``_l``/``_r``)
+et non par ``len()``. Deux décisions distinctes :
+
+- **L'unité de stack est ASCII** (``bb``), plus le symbole musical ``𝄫``
+  (U+1D12B) utilisé jusqu'ici. Ce caractère est hors du plan multilingue de
+  base : la plupart des polices monospace ne l'ont pas et le client retombe
+  sur une police de substitution, dont la chasse n'a aucune raison de valoir
+  une colonne. Comme il n'apparaît que sur les lignes portant un montant, le
+  décalage qui en résultait n'était pas uniforme — il ne touchait que
+  certaines lignes, c'est-à-dire le pire cas pour un dessin en colonnes.
+  ``bb`` occupe deux colonnes, toujours, partout.
+- **Les symboles de couleur ``♠♥♦♣`` restent** (convention d'affichage non
+  négociable des cartes, cf. ``cards.py``). Ils sont de classe Unicode "East
+  Asian Ambiguous" — comme les caractères de dessin du cadre ``╭─│╯`` —, donc
+  réglés par la constante ``AMBIGUOUS_WIDTH``, à 1 : la valeur correcte pour
+  toute police monospace occidentale, c'est-à-dire tous les clients visés.
+  Limite assumée : dans un terminal configuré pour l'Asie de l'Est, où ces
+  caractères occupent 2 colonnes, le cadre lui-même se déforme (ses bords ne
+  sont pas paddés, ils sont écrits tels quels) — passer ``AMBIGUOUS_WIDTH`` à
+  2 corrigerait le contenu paddé sans corriger le cadre, donc ce n'est PAS
+  une option supportée, juste un curseur documenté. Le contrat de rendu vaut
+  pour une police à chasse fixe où un caractère ambigu vaut une colonne.
+
+Le même calcul rend aussi la troncature sûre (jamais au milieu d'un
+caractère) et donne 0 colonne aux marques combinantes et sélecteurs de
+variante, qui feraient déborder une case sinon.
 
 Stack affiché à côté de chaque siège : stack RESTANT (stack de début de main
 moins tout l'investi sur la main entière, cf. ``remaining_stack``), jamais
@@ -115,9 +143,19 @@ case vide par accident :
 """
 from __future__ import annotations
 
+import unicodedata
 from typing import Any
 
-BB_UNIT = "𝄫"
+BB_UNIT = "bb"
+
+# Largeur d'affichage attribuée aux caractères de classe Unicode
+# "East Asian Ambiguous" -- dont ♠♥♦♣. 1 dans une police monospace
+# occidentale (le cas de tous les clients visés), 2 dans un terminal
+# configuré pour l'Asie de l'Est. Curseur unique : si un client affiche les
+# symboles de couleur en double chasse, passer cette constante à 2 réaligne
+# TOUTES les colonnes d'un coup, sans toucher au reste du module.
+AMBIGUOUS_WIDTH = 1
+
 INNER = 18
 BOX_W = INNER + 2
 SIDE_W = 10
@@ -151,16 +189,61 @@ def _abbr(archetype: str) -> str:
     return ARCHETYPE_ABBR.get(archetype.lower(), archetype[:3].lower())
 
 
+def char_width(ch: str) -> int:
+    """Largeur d'affichage d'UN caractère, en colonnes monospace.
+
+    ``len()`` compte des points de code, pas des colonnes : une marque
+    combinante ou un sélecteur de variante occupe 0 colonne, un idéogramme en
+    occupe 2. Padder avec ``len()`` décale donc la colonne de droite dès
+    qu'une ligne contient un de ces caractères et pas les autres -- ce qui
+    rend le décalage INCONSISTANT d'une ligne à l'autre (seules celles qui
+    portent des cartes/montants bougent), le symptôme exact rapporté."""
+    if unicodedata.category(ch) in ("Mn", "Me", "Cf", "Cc"):
+        return 0  # combinantes, sélecteurs de variante, ZWJ, contrôles
+    eaw = unicodedata.east_asian_width(ch)
+    if eaw in ("W", "F"):
+        return 2
+    if eaw == "A":
+        return AMBIGUOUS_WIDTH
+    return 1
+
+
+def display_width(text: Any) -> int:
+    """Largeur d'affichage d'une chaîne, en colonnes monospace."""
+    return sum(char_width(ch) for ch in str(text))
+
+
+def _fit(text: Any, width: int) -> tuple[str, int]:
+    """Tronque à ``width`` COLONNES (jamais au milieu d'un caractère) et rend
+    (texte tronqué, largeur réellement occupée)."""
+    out: list[str] = []
+    used = 0
+    for ch in str(text):
+        w = char_width(ch)
+        if used + w > width:
+            break
+        out.append(ch)
+        used += w
+    return "".join(out), used
+
+
 def _c(text: str, width: int) -> str:
-    return str(text)[:width].center(width)
+    fitted, used = _fit(text, width)
+    margin = width - used
+    # Même répartition que `str.center` (formule CPython), pour que le rendu
+    # reste identique au caractère près sur du texte purement ASCII.
+    left = margin // 2 + (margin & width & 1)
+    return " " * left + fitted + " " * (margin - left)
 
 
 def _l(text: str, width: int) -> str:
-    return str(text)[:width].ljust(width)
+    fitted, used = _fit(text, width)
+    return fitted + " " * (width - used)
 
 
 def _r(text: str, width: int) -> str:
-    return str(text)[:width].rjust(width)
+    fitted, used = _fit(text, width)
+    return " " * (width - used) + fitted
 
 
 def _split_layout(order: list[str]) -> tuple[list[str], str | None, list[str]]:
@@ -222,9 +305,9 @@ def render(*, seats: dict[str, dict], hero_position: str, hero: dict, board: lis
     def action_content(pos: str | None) -> str:
         action, amount = s(pos, "action", ""), s(pos, "amount")
         # `amount and` (plutôt que `amount is not None and amount != ""`)
-        # faisait disparaître le "· 0𝄫" d'un montant nul (ex. fold à 0, ou un
+        # faisait disparaître le "· 0bb" d'un montant nul (ex. fold à 0, ou un
         # check explicitement à 0) -- 0 est un montant réel, pas une absence
-        # de montant (cf. `bb()`, qui SAIT afficher "0𝄫").
+        # de montant (cf. `bb()`, qui SAIT afficher "0bb").
         return f"{action} · {bb(amount)}" if action and amount not in (None, "") else (action or "")
 
     left_labels, top_label, right_labels = _split_layout(order)
@@ -309,7 +392,7 @@ def render(*, seats: dict[str, dict], hero_position: str, hero: dict, board: lis
         hero_action = "sb" if hero_position == "SB" else "bb" if hero_position == "BB" else "post"
     hero_amount = hero.get("amount")
     # Même correctif que `action_content` ci-dessus : un montant à 0 ne doit
-    # pas faire disparaître le "· 0𝄫".
+    # pas faire disparaître le "· 0bb".
     hero_content = (f"{hero_action} · {bb(hero_amount)}"
                     if hero_action and hero_amount not in (None, "") else hero_action)
     lines.append(" " * SIDE_W + "│" + _c(hero_content, INNER) + "│")

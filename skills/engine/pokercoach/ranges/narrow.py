@@ -36,6 +36,17 @@ contre un ``UNCERTAINTY_BAND`` de 0.04) — exactement l'artefact que ce
 mécanisme existe pour éviter. Un plancher, par définition, ne doit pas
 s'éroder rue après rue.
 
+Conséquence sur les compteurs de sortie, à lire attentivement (rapport de
+bug : `remaining_combos` restait égal à `original_combos` sur check/bet/call
+alors que `retained_pct` variait) : le plancher RETIENT un combo non viable,
+il ne le SUPPRIME pas. Un combo ne disparaît de la range de sortie que s'il
+est bloqué par le board ou coupé par une règle structurelle. `to_json()`
+sépare donc explicitement les trois populations — `combos_kept_full_weight`,
+`combos_kept_at_bluff_floor`, `combos_removed` — et dit dans `note` que
+`retained_pct` est une part de POIDS, jamais un compte de combos. Les deux
+chiffres ne sont pas incohérents : ils ne mesurent simplement pas la même
+chose, et c'est `retained_pct` qui porte le filtrage.
+
 Ce qui N'EST PAS corrigé ici (cause distincte, toujours ouverte, cf.
 README) : le critère de viabilité lui-même (``action in b.viable_actions``)
 reste lâche à budget FRAIS -- une main `trash` a un ATT de base non nul,
@@ -64,19 +75,69 @@ MIN_BLUFF_FLOOR_WEIGHT = 0.08
 
 @dataclass
 class NarrowResult:
+    """Résultat d'un narrowing. Trois compteurs de combos SÉPARÉS, parce que
+    "combo présent dans la range de sortie" et "combo qui joue vraiment cette
+    action" ne sont pas la même chose ici (cf. le mécanisme de plancher
+    ci-dessus) — les confondre a produit un `remaining_combos` égal à
+    `original_combos` quelle que soit l'action, à côté d'un `retained_pct`
+    qui, lui, variait : incohérent à la lecture."""
+
+    action: str
+    filters_combos: bool
     original_combos: int
-    remaining_combos: int
+    kept_full_weight: int
+    kept_at_floor: int
+    removed_combos: int
     remaining_weight: float
     original_weight: float
     range_str: str
 
+    @property
+    def remaining_combos(self) -> int:
+        """Combos encore présents (poids > 0) dans ``range_str``."""
+        return self.kept_full_weight + self.kept_at_floor
+
+    @property
+    def retained_pct(self) -> float:
+        """Part de la range CONSERVÉE, en POIDS (combos × poids), pas en
+        nombre de combos : c'est cette grandeur-là qui porte le filtrage,
+        puisqu'un combo non viable est déprécié au plancher plutôt que
+        supprimé."""
+        if not self.original_weight:
+            return 0.0
+        return round(100 * self.remaining_weight / self.original_weight, 1)
+
+    def _note(self) -> str:
+        if not self.filters_combos:
+            return (f"action={self.action!r} : AUCUN filtrage (un fold ne dit rien de positif sur "
+                    "la range restante ; un check est un signal trop faible pour filtrer). La range "
+                    "de sortie est la range d'entrée moins les combos bloqués par le board, et "
+                    "retained_pct vaut 100% par construction — ce n'est pas une mesure de lecture.")
+        if self.kept_at_floor:
+            return (f"retained_pct est PONDÉRÉ, pas un compte de combos : {self.kept_at_floor} combo(s) "
+                    f"dont le budget ATT/DEF ne justifie pas {self.action!r} sont RETENUS au poids "
+                    f"plancher de {MIN_BLUFF_FLOOR_WEIGHT:.0%} (anti-polarisation, cf. docstring du "
+                    "module), pas supprimés — d'où un remaining_combos proche (voire égal) à "
+                    "original_combos alors que retained_pct chute. Seuls les combos coupés par une "
+                    "règle structurelle (multiway, gate exploitante) disparaissent vraiment.")
+        return (f"retained_pct est PONDÉRÉ (combos × poids). Aucun combo n'a été retenu au plancher : "
+                f"les {self.removed_combos} combo(s) écarté(s) l'ont été par une règle structurelle "
+                "(multiway, gate exploitante) et sont réellement absents de la range de sortie.")
+
     def to_json(self) -> dict[str, Any]:
         return {
+            "action": self.action,
+            "filters_combos": self.filters_combos,
             "original_combos": self.original_combos,
             "remaining_combos": self.remaining_combos,
-            "retained_pct": round(100 * self.remaining_weight / self.original_weight, 1)
-            if self.original_weight else 0.0,
+            "combos_kept_full_weight": self.kept_full_weight,
+            "combos_kept_at_bluff_floor": self.kept_at_floor,
+            "combos_removed": self.removed_combos,
+            "bluff_floor_weight": MIN_BLUFF_FLOOR_WEIGHT,
+            "retained_pct": self.retained_pct,
+            "retained_pct_basis": "poids (combos × poids), pas nombre de combos",
             "range": self.range_str,
+            "note": self._note(),
         }
 
 
@@ -146,9 +207,12 @@ def narrow(range_str: str, board: list[Card], action: str, *, pot_type: str, str
     texture = classify_texture(board)
 
     kept: list[WeightedCombo] = []
+    kept_full_weight = 0
+    kept_at_floor = 0
     for wc in combos:
         if no_filter:
             kept.append(wc)
+            kept_full_weight += 1
             continue
         hc = classify(list(wc.combo), board)
         b = compute_budget(
@@ -158,12 +222,14 @@ def narrow(range_str: str, board: list[Card], action: str, *, pot_type: str, str
         )
         if action in b.viable_actions:
             kept.append(wc)
+            kept_full_weight += 1
         elif _pressure_exhausted(b, action):
             # Poids plancher CONSTANT, pas `wc.weight * MIN_BLUFF_FLOOR_WEIGHT`
             # (régression revue #2, cf. docstring du module) : sinon un combo
             # floored sur plusieurs rues consécutives voit son poids s'éroder
             # multiplicativement au lieu de rester à un plancher stable.
             kept.append(WeightedCombo(combo=wc.combo, weight=MIN_BLUFF_FLOOR_WEIGHT))
+            kept_at_floor += 1
         # sinon : coupé par une règle structurelle (multiway/exploit) -- rejeté entièrement
 
     original_weight = sum(c.weight for c in combos)
@@ -171,7 +237,10 @@ def narrow(range_str: str, board: list[Card], action: str, *, pot_type: str, str
     kept_str = ",".join(_combo_token(c) for c in kept)
 
     return NarrowResult(
-        original_combos=len(combos), remaining_combos=len(kept),
+        action=action, filters_combos=not no_filter,
+        original_combos=len(combos),
+        kept_full_weight=kept_full_weight, kept_at_floor=kept_at_floor,
+        removed_combos=len(combos) - len(kept),
         remaining_weight=remaining_weight, original_weight=original_weight,
         range_str=kept_str,
     )

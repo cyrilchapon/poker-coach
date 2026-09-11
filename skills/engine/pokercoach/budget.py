@@ -114,6 +114,32 @@ class Budget:
 
 # --- Base par classe -----------------------------------------------------
 
+# Classes dont la force se lit "une paire + un kicker" : celles qui ont une
+# entrée dans `pair_class_penalties` (texture-modifiers.yaml) et dont le
+# budget dépend du `pot_type`.
+PAIR_FAMILY = ("overpair", "top_pair", "second_pair", "third_pair", "fourth_fifth_pair",
+               "weak_showdown", "underpair", "nuts_high", "second_high")
+
+
+def effective_pair_class(hc: HandClass) -> str | None:
+    """Classe de la famille "paire simple" qui porte la force RÉELLE de la
+    main, ou ``None`` si la main n'en relève pas.
+
+    Deux cas rendent autre chose que ``hc.made`` :
+    - ``two_pair`` dont une moitié vient du board (paire servie + board
+      apparié, cf. ``handclass``) : c'est ``made_sub.strength_proxy`` qui
+      décide, pas la table ``two_pair`` (calibrée board non apparié) ;
+    - toute autre classe hors famille paire : ``None``.
+
+    Utilisé par les trois étages où la classe de paire compte : baseline,
+    pénalités de texture, et le test "cette ligne est-elle un bluff ?"."""
+    if hc.made == "two_pair" and hc.made_sub.get("includes_board_pair"):
+        return hc.made_sub.get("strength_proxy")
+    if hc.made in PAIR_FAMILY:
+        return hc.made
+    return None
+
+
 def _base_made_hands(hc: HandClass, pot_type: str, texture: Texture) -> tuple[float, float]:
     table = _att_def()["made_hands"]
     made = hc.made
@@ -173,6 +199,15 @@ def _base_made_hands(hc: HandClass, pot_type: str, texture: Texture) -> tuple[fl
             att = lo + frac * (hi - lo)
             return att, _as_float(branch["def"])
 
+    if made == "two_pair" and hc.made_sub.get("includes_board_pair"):
+        # La moitié "paire du board" est partagée par tous les joueurs : seule
+        # la paire servie départage. `att-def-budgets.yaml` le dit dans ses
+        # propres notes two_pair ("force réelle ~ top/middle paire") -- on
+        # applique la note plutôt que la table, qui suppose deux paires que
+        # l'adversaire n'a pas.
+        return _base_pair_family(hc.made_sub.get("strength_proxy") or "underpair",
+                                  hc, pot_type, table)
+
     if made == "two_pair":
         matrix = table["two_pair"]["priority_matrix"]
         suit = texture.suit
@@ -200,44 +235,8 @@ def _base_made_hands(hc: HandClass, pot_type: str, texture: Texture) -> tuple[fl
         by_rank = _row_by_when(matrix, ["dry"])["value_by_rank"]
         return _leaf(by_rank.get(f"r{idx}", by_rank["r10"]))
 
-    if made == "overpair":
-        node = table["overpair"]["by_pot_type"].get(pot_type, table["overpair"]["by_pot_type"]["srp_limp"])
-        pocket = hc.made_sub.get("pocket_rank", "other")
-        leaf = node.get(pocket, node["other"])
-        return _leaf(leaf)
-
-    if made == "top_pair":
-        node = table["top_pair"]["by_pot_type"].get(pot_type, table["top_pair"]["by_pot_type"]["srp"])
-        kb = hc.made_sub.get("kicker_bucket", "other")
-        leaf = node.get(kb, node["other"])
-        return _leaf(leaf)
-
-    if made in ("second_pair", "third_pair", "fourth_fifth_pair"):
-        node = table[made]["by_pot_type"].get(pot_type)
-        if node is None:
-            node = table[made]["by_pot_type"].get("srp") or table[made]["by_pot_type"].get("srp_limp", {})
-        kb = hc.made_sub.get("kicker_bucket", "other")
-        key_map = {"tptk": "pocket_or_top_kicker", "tpsk": "k2", "k3": "k3"}
-        key = key_map.get(kb, "other")
-        leaf = node.get(key) or node.get("other") or {"att": 0, "def": node.get("def", 0)}
-        return _leaf(leaf) if isinstance(leaf, dict) else (0.0, _as_float(leaf))
-
-    if made in ("nuts_high", "second_high"):
-        node = table[made]
-        pt_key = {"limp": "limp", "srp": "srp", "three_bet_pot": "three_bet_pot",
-                  "four_bet_pot": "four_bet_pot"}.get(pot_type, "srp")
-        rng = node["def_by_pot_type"].get(pt_key, node["def_by_pot_type"]["srp"])
-        deff = (rng["min"] + rng["max"]) / 2
-        return _as_float(node.get("att", 0.0)), deff
-
-    if made in ("weak_showdown", "underpair"):
-        # `underpair` (paire de poche sous le board, cf. rapport de bug
-        # live-session #4) réutilise la baseline de `weak_showdown` -- même
-        # profil de showdown marginal, aucune calibration dédiée dans
-        # l'annexe E source (curseur, pas une vérité figée).
-        node = table["weak_showdown"]["by_pot_type"]
-        key = "three_bet_pot" if pot_type == "three_bet_pot" else ("four_bet_pot" if pot_type == "four_bet_pot" else "limp_srp")
-        return _leaf(node[key])
+    if made in PAIR_FAMILY:
+        return _base_pair_family(made, hc, pot_type, table)
 
     if made == "trash":
         node = table["trash"]
@@ -245,6 +244,49 @@ def _base_made_hands(hc: HandClass, pot_type: str, texture: Texture) -> tuple[fl
         return (rng["min"] + rng["max"]) / 2, _as_float(node["def"])
 
     return 0.0, 0.0
+
+
+def _base_pair_family(cls: str, hc: HandClass, pot_type: str, table: dict) -> tuple[float, float]:
+    """Baseline d'une classe de la famille "paire simple". ``cls`` est passé
+    explicitement (et non lu dans ``hc.made``) pour que la double paire dont
+    une moitié vient du board puisse emprunter la ligne de son proxy de
+    force -- cf. ``effective_pair_class``."""
+    if cls == "overpair":
+        node = table["overpair"]["by_pot_type"].get(pot_type, table["overpair"]["by_pot_type"]["srp_limp"])
+        pocket = hc.made_sub.get("pocket_rank", "other")
+        leaf = node.get(pocket, node["other"])
+        return _leaf(leaf)
+
+    if cls == "top_pair":
+        node = table["top_pair"]["by_pot_type"].get(pot_type, table["top_pair"]["by_pot_type"]["srp"])
+        kb = hc.made_sub.get("kicker_bucket", "other")
+        leaf = node.get(kb, node["other"])
+        return _leaf(leaf)
+
+    if cls in ("second_pair", "third_pair", "fourth_fifth_pair"):
+        node = table[cls]["by_pot_type"].get(pot_type)
+        if node is None:
+            node = table[cls]["by_pot_type"].get("srp") or table[cls]["by_pot_type"].get("srp_limp", {})
+        kb = hc.made_sub.get("kicker_bucket", "other")
+        key_map = {"tptk": "pocket_or_top_kicker", "tpsk": "k2", "k3": "k3"}
+        key = key_map.get(kb, "other")
+        leaf = node.get(key) or node.get("other") or {"att": 0, "def": node.get("def", 0)}
+        return _leaf(leaf) if isinstance(leaf, dict) else (0.0, _as_float(leaf))
+
+    if cls in ("nuts_high", "second_high"):
+        node = table[cls]
+        pt_key = {"limp": "limp", "srp": "srp", "three_bet_pot": "three_bet_pot",
+                  "four_bet_pot": "four_bet_pot"}.get(pot_type, "srp")
+        rng = node["def_by_pot_type"].get(pt_key, node["def_by_pot_type"]["srp"])
+        deff = (rng["min"] + rng["max"]) / 2
+        return _as_float(node.get("att", 0.0)), deff
+
+    # `underpair` (paire de poche sous tout le board) réutilise la baseline de
+    # `weak_showdown` -- même profil de showdown marginal, aucune calibration
+    # dédiée dans l'annexe E source (curseur, pas une vérité figée).
+    node = table["weak_showdown"]["by_pot_type"]
+    key = "three_bet_pot" if pot_type == "three_bet_pot" else ("four_bet_pot" if pot_type == "four_bet_pot" else "limp_srp")
+    return _leaf(node[key])
 
 
 def _base_draw(hc: HandClass) -> tuple[float, float | None]:
@@ -261,11 +303,14 @@ def _base_draw(hc: HandClass) -> tuple[float, float | None]:
 # --- Pénalités de texture --------------------------------------------------
 
 def _apply_texture_penalties(att: float, deff: float, made: str, texture: Texture, street: str) -> tuple[float, float, list[str]]:
+    """``made`` est la classe EFFECTIVE (cf. ``effective_pair_class``), pas
+    forcément ``hc.made`` : une double paire dont une moitié vient du board
+    doit encaisser les mêmes pénalités de texture que la paire simple dont
+    elle emprunte la force -- à commencer par le malus "board apparié", qui
+    la concerne par construction."""
     mods = _texture_mods()["pair_class_penalties"]
     notes: list[str] = []
-    pair_family = ("overpair", "top_pair", "second_pair", "third_pair", "fourth_fifth_pair",
-                   "weak_showdown", "underpair", "nuts_high", "second_high")
-    if made not in pair_family:
+    if made not in PAIR_FAMILY:
         return att, deff, notes
 
     if texture.suit == "four_plus_flush":
@@ -363,18 +408,21 @@ def compute(hc: HandClass, texture: Texture, *, pot_type: str, street: str,
     une décision de check/bet)."""
     att_base, def_base = _base_made_hands(hc, pot_type, texture)
     draw_att, combo_bonus_def = _base_draw(hc)
+    # Classe de paire effective : `hc.made` sauf pour une double paire dont
+    # une moitié vient du board, qui emprunte la force de son proxy.
+    pair_class = effective_pair_class(hc) or hc.made
 
     # Une main faible + un tirage : l'ATT du tirage gouverne (semi-bluff),
     # et le bonus de combo s'ajoute à la baseline DEF de la main faite.
     att = max(att_base, draw_att) if hc.draw else att_base
     deff = def_base + (combo_bonus_def or 0.0) if hc.draw and combo_bonus_def else def_base
 
-    att, deff, tex_notes = _apply_texture_penalties(att, deff, hc.made, texture, street)
+    att, deff, tex_notes = _apply_texture_penalties(att, deff, pair_class, texture, street)
     att_after_pen, def_after_pen = att, deff
 
     att, deff, mw_removed = _apply_multiway(att, deff, hc.made, hc.draw, n_opponents_active)
 
-    is_bluff_line = hc.made in ("trash", "weak_showdown", "underpair") or hc.draw is not None
+    is_bluff_line = pair_class in ("trash", "weak_showdown", "underpair") or hc.draw is not None
     street_index = STREET_INDEX.get(street, 0)
     att, exploit_removed, exploit_notes = _apply_exploit_gate(
         att, hc.made, hc.draw, villain_archetype, is_bluff_line, street_index)

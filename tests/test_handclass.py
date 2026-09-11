@@ -64,6 +64,55 @@ def test_two_pair_reclassified_when_board_already_paired():
     assert r.made in ("top_pair", "second_pair", "third_pair", "fourth_fifth_pair")
 
 
+def test_pocket_pair_on_a_paired_board_is_two_pair_not_an_underpair():
+    # Live-session bug report: hero TT on J-9-9-3 came back as
+    # made="underpair". Two things wrong at once -- hero holds a genuine two
+    # pair (his own tens + the board's nines), and TT is not "strictly below
+    # every board card" (the literal definition of `underpair`), it only
+    # trails the jack.
+    r = H(["T♠", "T♥"], ["J♠", "9♦", "9♣", "3♥"])
+    assert r.made == "two_pair"
+    assert r.made_sub["includes_board_pair"] is True
+    assert r.made_sub["pocket_rank"] == "T"
+    assert r.made_sub["board_pair_rank"] == "9"
+    assert r.made_sub["board_ranks_above"] == 1
+    # Half the hand is the shared board pair, so the strength that decides
+    # the hand is the pocket pair's rank among the board's ranks.
+    assert r.made_sub["strength_proxy"] == "second_pair"
+
+
+def test_pocket_pair_below_a_paired_board_is_two_pair_with_an_underpair_proxy():
+    # Same rule, weakest case: 22 on J-9-9 really is two pair (deuces and
+    # nines), but nothing about that beats a single board card -- the proxy
+    # keeps it on underpair-level budgets instead of promoting it.
+    r = H(["2♠", "2♥"], ["J♠", "9♦", "9♣"])
+    assert r.made == "two_pair"
+    assert r.made_sub["strength_proxy"] == "underpair"
+
+
+def test_pocket_pair_over_a_paired_board_stays_an_overpair():
+    # An overpair on a paired board is also literally two pair, but
+    # "overpair" is the standard term AND the class with calibrated budgets
+    # (including its own paired-board penalty) -- left untouched on purpose.
+    r = H(["A♠", "A♥"], ["J♠", "9♦", "9♣"])
+    assert r.made == "overpair"
+
+
+def test_pocket_pair_on_an_unpaired_board_is_untouched():
+    # The new branch only fires when the BOARD supplies the second pair.
+    r = H(["T♠", "T♥"], ["J♠", "9♦", "6♣"])
+    assert r.made == "underpair"
+
+
+def test_hero_pairing_an_already_paired_board_is_still_a_plain_pair():
+    # The other half of the paired-board rule, unchanged: here the hero's
+    # own card makes one pair and the BOARD makes the other, so the "two
+    # pair" is hero's pair + a pair everybody shares -- a plain pair.
+    r = H(["4♠", "K♥"], ["9♦", "9♣", "4♥"])
+    assert r.made == "second_pair"
+    assert "includes_board_pair" not in r.made_sub
+
+
 def test_double_paired_board_is_flagged_as_special_override():
     r = H(["4♠", "K♥"], ["9♦", "9♣", "4♥", "4♦"])
     assert r.board_override == "double_paired_board"

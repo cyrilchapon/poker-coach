@@ -12,18 +12,35 @@ cf. references/03-multiway-generalization.md :
   cartes adverses possibles compte tenu du board et on compare le score.
   C'est plus robuste que d'encoder à la main chaque définition textuelle de
   l'annexe, et ça couvre uniformément full+/couleur nut/quinte nut/set nut.
-- **two_pair sur board apparié** : suit la note du YAML — si une des deux
-  paires vient du board lui-même, la main est reclassée dans la famille
-  paire simple (overpair/top_pair/...) plutôt que "two_pair".
+- **two_pair sur board apparié** : deux cas distincts.
+  *(a)* Le héros apparie lui-même un rang du board alors que le board est
+  déjà apparié (ex. K♠4♥ sur 9-9-4) : une des deux paires vient du board,
+  la main est reclassée dans la famille paire simple (top_pair/second_pair/
+  ...), suivant la note du YAML.
+  *(b)* Le héros tient une paire SERVIE qui ne touche aucun rang du board,
+  et c'est le BOARD qui est apparié (ex. TT sur J-9-9-3) : la main est une
+  vraie double paire (la paire servie + la paire du board), classée
+  ``two_pair`` avec ``made_sub.includes_board_pair = True``. Le BUDGET de
+  cette sous-classe ne passe PAS par la table ``two_pair`` (calibrée pour
+  une double paire sur board non apparié) : ``made_sub.strength_proxy``
+  nomme la classe de la famille paire simple qui porte sa force réelle
+  (position de la paire servie parmi les rangs du board : ``second_pair``,
+  ``third_pair``, ``fourth_fifth_pair`` ou ``underpair``), et c'est elle que
+  ``budget.py`` interroge — exactement la note du YAML ("force réelle ~
+  top/middle paire"). Une paire servie SUPÉRIEURE à tout le board reste
+  ``overpair`` (terminologie standard, budgets calibrés avec leur propre
+  malus "board apparié") et n'est pas concernée.
 - **Kicker buckets** (tptk/tpsk/k3/k4/k5/other) : calculés par position du
   kicker parmi les rangs de board restants + le kicker lui-même, triés
   descendant. Une bonne approximation, pas une reproduction exacte des
   seuils de l'annexe (non publiés à ce niveau de détail).
 - **Underpair** (paire de poche sous toutes les cartes du board, ne touchant
   pas le board) : classe ``underpair``, ajoutée à la taxonomie PokerSkill à
-  15 classes (rapport de bug live-session #4 -- classe trop fréquente pour
-  rester noyée dans ``weak_showdown``). Budgets ATT/DEF encore alignés sur
-  ``weak_showdown`` faute de calibration dédiée, cf. ``budget.py``.
+  15 classes (classe trop fréquente pour rester noyée dans
+  ``weak_showdown``). Budgets ATT/DEF encore alignés sur ``weak_showdown``
+  faute de calibration dédiée, cf. ``budget.py``. Sur un board APPARIÉ, une
+  paire servie ne relève jamais de cette classe : elle a réellement deux
+  paires, cf. le point *(b)* ci-dessus.
 - **Tirages** : classification simplifiée par seuils monotones (rang de la
   couleur, ouverture de la quinte, somme des rangs pour les surcartes) —
   pas de détection des combinaisons "backdoor". Les ``outs`` restent EXACTS
@@ -150,6 +167,19 @@ def _classify_made(hole: list[Card], board: list[Card], texture: Texture) -> tup
         if len(matched) >= 2 and texture.rank_labels[0] == "unpaired":
             rank_bucket = _two_pair_rank_bucket(matched, board)
             return "two_pair", {"rank_bucket": rank_bucket}, 1.0
+        if hole[0].rank == hole[1].rank and not matched and paired_board:
+            # Paire SERVIE qui ne touche aucun rang du board, sur un board
+            # lui-même apparié (ex. TT sur J-9-9-3) : le héros a réellement
+            # DEUX PAIRES (la sienne + celle du board), pas "une paire de
+            # poche sous la carte haute du board". Le classifieur rendait
+            # ``underpair`` ici -- doublement faux : la main n'est pas une
+            # paire simple, et TT n'est pas sous TOUTES les cartes du board
+            # (ce que `underpair` veut littéralement dire).
+            hero_is_over = hole[0].rank_index > RANKS.index(_board_unique_ranks_sorted(board)[0])
+            if not hero_is_over:
+                # Une paire servie au-dessus de TOUT le board reste `overpair`
+                # (terminologie standard, budgets dédiés) -- pas reclassée ici.
+                return _classify_pocket_pair_over_paired_board(hole, board, texture)
         # Une des deux paires vient du board -> reclassée en paire simple.
         return _classify_pair_family(hole, board, texture)
     if cat9 == "Pair":
@@ -254,6 +284,61 @@ def _two_pair_rank_bucket(matched_ranks: list[str], board: list[Card]) -> str:
         position = len(all_possible_pairs) - 1
     decile = min(9, int(position / max(1, len(all_possible_pairs)) * 10))
     return f"r{decile + 1}"
+
+
+# Position de la paire servie parmi les rangs du board -> classe de la famille
+# "paire simple" qui porte sa force RÉELLE. Sert de `strength_proxy` pour une
+# double paire dont une moitié vient du board (cf. docstring du module).
+_PAIR_FAMILY_BY_RANKS_ABOVE = {1: "second_pair", 2: "third_pair"}
+
+
+def pocket_pair_strength_proxy(pocket_rank: str, board_ranks_sorted: list[str]) -> tuple[str, int]:
+    """(classe de force équivalente, nombre de rangs du board au-dessus).
+
+    Mesure la seule chose qui décide de la force d'une paire servie face à
+    une paire adverse : combien de rangs du board la surclassent. 0 ->
+    ``overpair``, tous -> ``underpair`` (le sens littéral de la classe),
+    entre les deux -> deuxième/troisième/quatrième paire."""
+    above = sum(1 for r in board_ranks_sorted if RANKS.index(r) > RANKS.index(pocket_rank))
+    if above == 0:
+        return "overpair", 0
+    if above >= len(board_ranks_sorted):
+        return "underpair", above
+    return _PAIR_FAMILY_BY_RANKS_ABOVE.get(above, "fourth_fifth_pair"), above
+
+
+def _classify_pocket_pair_over_paired_board(hole: list[Card], board: list[Card],
+                                             texture: Texture) -> tuple[str, dict, float]:
+    """Paire servie + paire du board = ``two_pair``, avec le proxy de force
+    qui évite de lui prêter le budget d'une vraie double paire.
+
+    ``att-def-budgets.yaml`` le dit déjà dans ses propres notes ("si le board
+    est apparié, la double paire inclut la paire du board : force réelle ~
+    top/middle paire") : la table ``two_pair`` est calibrée sur un board NON
+    apparié, où les deux paires sont des cartes que l'adversaire n'a pas. Ici
+    la moitié board est partagée par tout le monde -- seule la paire servie
+    départage. ``strength_proxy`` nomme la classe qui porte cette force ;
+    ``budget.py`` l'interroge à la place de la table ``two_pair``."""
+    board_ranks_sorted = _board_unique_ranks_sorted(board)
+    pocket_rank = hole[0].rank
+    proxy, above = pocket_pair_strength_proxy(pocket_rank, board_ranks_sorted)
+    board_pair_rank = max(
+        (r for r, n in texture.board_rank_counts.items() if n >= 2),
+        key=lambda r: RANKS.index(r),
+    )
+    sub = {
+        "includes_board_pair": True,
+        "pocket_pair": True,
+        "pocket_rank": pocket_rank,
+        "board_pair_rank": board_pair_rank,
+        "board_ranks_above": above,
+        "strength_proxy": proxy,
+        # Une paire servie "kicke" comme la meilleure carte possible : même
+        # convention que `_classify_pair_family`, pour que le lookup de budget
+        # du proxy (second_pair/third_pair...) tombe sur la bonne colonne.
+        "kicker_bucket": "tptk",
+    }
+    return "two_pair", sub, 1.0
 
 
 def _classify_pair_family(hole: list[Card], board: list[Card], texture: Texture) -> tuple[str, dict, float]:

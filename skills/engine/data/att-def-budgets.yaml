@@ -129,7 +129,7 @@ made_hands:
     notes:
       - "Top two sur board sûr : jouer pour les tapis sur toutes les rues."
       - "Bottom two : rester agressif mais prudent sur turn/river effrayante."
-      - "Si le board est apparié, la double paire inclut la paire du board : force réelle ~ top/middle paire."
+      - "Si le board est apparié, la double paire inclut la paire du board : force réelle ~ top/middle paire. Le moteur applique cette note automatiquement : une paire SERVIE sur board apparié (made_sub.includes_board_pair) est budgétée par sa classe de paire simple équivalente (made_sub.strength_proxy), jamais par cette table -- qui suppose deux paires que l'adversaire n'a pas."
 
   overpair:
     by_pot_type:

@@ -159,3 +159,47 @@ def test_two_pair_budget_is_unchanged_by_reordering_the_priority_matrix(monkeypa
     shuffled_result = budget_mod._base_made_hands(hc, "srp", tex)
 
     assert shuffled_result == original_result
+
+
+# --- paire servie + paire du board : budget par proxy de force ---------------
+
+def test_pocket_pair_plus_board_pair_uses_its_strength_proxy_not_the_two_pair_table():
+    # Live-session bug report: TT on J-9-9-3 is a real two pair, but half of
+    # it (the nines) is shared by every opponent -- att-def-budgets.yaml says
+    # so itself in its two_pair notes ("force réelle ~ top/middle paire").
+    # The budget must come from the pocket pair's rank among the board ranks
+    # (second_pair here), never from the two_pair table, which assumes two
+    # pairs the opponent does not have.
+    hc, tex = hc_and_texture(["T♠", "T♥"], ["J♠", "9♦", "9♣", "3♥"])
+    assert hc.made == "two_pair"
+    b = compute(hc, tex, pot_type="srp", street="turn", n_opponents_active=1,
+                pressure_spent=0.0, pressure_faced=0.0)
+    second_pair_hc, second_pair_tex = hc_and_texture(["8♠", "K♥"], ["J♠", "8♦", "3♣", "2♥"])
+    real_two_pair_hc, real_two_pair_tex = hc_and_texture(["9♠", "4♥"], ["9♦", "4♣", "2♥"])
+    real_two_pair = compute(real_two_pair_hc, real_two_pair_tex, pot_type="srp", street="flop",
+                            n_opponents_active=1, pressure_spent=0.0, pressure_faced=0.0)
+    assert b.att_base == pytest.approx(1.8)   # second_pair / srp / pocket_or_top_kicker
+    assert b.def_base == pytest.approx(2.8)
+    assert b.att_base < real_two_pair.att_base
+    assert b.def_base < real_two_pair.def_base
+
+
+def test_pocket_pair_plus_board_pair_still_takes_the_paired_board_penalty():
+    # The texture stage keys off the pair family. Before the fix the class
+    # was `underpair` (in the family); a naive fix to `two_pair` would have
+    # dropped it out of the family and silently skipped the paired-board
+    # malus -- on a paired board, of all things.
+    hc, tex = hc_and_texture(["T♠", "T♥"], ["J♠", "9♦", "9♣", "3♥"])
+    b = compute(hc, tex, pot_type="srp", street="turn", n_opponents_active=1,
+                pressure_spent=0.0, pressure_faced=0.0)
+    assert b.def_after_penalties == pytest.approx(2.4)  # 2.8 + mid_low_pairs_delta (-0.4)
+
+
+def test_pocket_pair_below_a_paired_board_keeps_an_underpair_budget():
+    # 22 on J-9-9 is two pair by the book and worth nothing by the table.
+    hc, tex = hc_and_texture(["2♠", "2♥"], ["J♠", "9♦", "9♣"])
+    assert hc.made == "two_pair"
+    b = compute(hc, tex, pot_type="srp", street="flop", n_opponents_active=1,
+                pressure_spent=0.0, pressure_faced=0.0)
+    assert b.att_base == 0.0
+    assert b.def_base == pytest.approx(0.8)  # weak_showdown baseline, as for an underpair

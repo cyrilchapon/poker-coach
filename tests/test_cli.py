@@ -305,7 +305,7 @@ def test_cli_render_shows_remaining_stack_not_the_stale_starting_stack(capsys):
         # + 4.0 (flop) = 7.0, so 100 - 7.0 = 93.0 each. Was stuck at the
         # stale starting stack (100.0) before the fix. render() drops the
         # superfluous ".0" on whole amounts (cf. render.py docstring), so
-        # the rendered stack reads "93𝄫", not "93.0𝄫".
+        # the rendered stack reads "93bb", not "93.0bb".
         assert ascii_art.count("93" + BB_UNIT) == 2
         assert "100" + BB_UNIT not in ascii_art
     finally:
@@ -364,16 +364,16 @@ def test_cli_render_places_seats_clockwise_from_hero_and_drops_busted_seats(caps
         "          │                  │",
         "          │                  │",
         "  CO(mnc) │                  │ BTN(tag)",
-        "     100𝄫 │                  │ 100𝄫",
+        "    100bb │                  │ 100bb",
         "          │                  │",
         "          │  -- -- -- -- --  │",
-        "          │    pot · 1.5𝄫    │",
+        "          │   pot · 1.5bb    │",
         "          │                  │",
         " UTG(nit) │                sb│ SB(lag)",
-        "     100𝄫 │              0.5𝄫│ 99.5𝄫",
-        "          │     bb · 1𝄫      │",
+        "    100bb │             0.5bb│ 99.5bb",
+        "          │     bb · 1bb     │",
         "          ╰──────────────────╯",
-        "                BB · 99𝄫                ",
+        "               BB · 99bb                ",
         "                 A♠ K♦                  ",
     ])
     # Le siège busté (HJ, archétype "fish") n'est plus à la table.

@@ -223,3 +223,49 @@ def test_narrow_bet_removes_combos_that_cannot_fund_a_bet():
     result = narrow.narrow("QQ+,72o", board, "bet", pot_type="srp", street="flop",
                             pressure_spent=1.0)
     assert result.remaining_weight < result.original_weight
+
+
+# --- cohérence des compteurs de narrow (rapport de bug live-session) --------
+
+def test_narrow_counters_separate_kept_floored_and_removed():
+    # Bug report: `remaining_combos` stayed equal to `original_combos` on
+    # check/bet/call while `retained_pct` moved -- the two read as
+    # contradictory. They are not: a combo whose budget can't fund the action
+    # is RETAINED at the bluff floor, not removed, so the count is flat by
+    # design and the weighted percentage is what carries the filtering. The
+    # output now says which is which instead of leaving it to be inferred.
+    board = parse_cards(["9♦", "6♣", "2♥"])
+    result = narrow.narrow("QQ+,72o", board, "bet", pot_type="srp", street="flop",
+                            pressure_spent=1.0)
+    out = result.to_json()
+    assert out["combos_kept_full_weight"] + out["combos_kept_at_bluff_floor"] == out["remaining_combos"]
+    assert out["remaining_combos"] + out["combos_removed"] == out["original_combos"]
+    assert out["combos_kept_at_bluff_floor"] > 0
+    assert out["retained_pct"] < 100.0
+    assert out["retained_pct_basis"].startswith("poids")
+    assert "plancher" in out["note"]
+
+
+def test_narrow_reports_no_filtering_for_fold_and_check():
+    # `retained_pct` == 100 on these two actions is not a measurement, it is
+    # "this action filters nothing" -- stated explicitly rather than left to
+    # look like a filter that happened to keep everything.
+    board = parse_cards(["9♦", "6♣", "2♥"])
+    for action in ("fold", "check"):
+        out = narrow.narrow("22+,72o", board, action, pot_type="srp", street="flop").to_json()
+        assert out["action"] == action
+        assert out["filters_combos"] is False
+        assert out["combos_kept_at_bluff_floor"] == 0
+        assert out["combos_removed"] == 0
+        assert out["retained_pct"] == 100.0
+        assert "AUCUN filtrage" in out["note"]
+
+
+def test_narrow_counts_structurally_removed_combos_as_removed():
+    # The other side: a combo cut by a structural rule really does leave the
+    # output range, so it lands in `combos_removed`, not in the floor bucket.
+    board = parse_cards(["T♦", "8♣", "3♥"])
+    out = narrow.narrow("96s,QQ+", board, "bet", pot_type="srp", street="flop",
+                         n_opponents_active=3).to_json()
+    assert out["combos_removed"] > 0
+    assert out["remaining_combos"] < out["original_combos"]
