@@ -5,19 +5,23 @@ description: Checklist des facteurs qualitatifs qui complètent l'équité et le
 
 # Decision Factors
 
-## v2 : le range narrowing est du code, pas de la prose
+## Ordre obligatoire : narrower la range AVANT de calculer un seuil
 
-**Erreur constatée en v1** : calculer le seuil de rentabilité arithmétique *avant* d'avoir vérifié que la range adverse contenait encore assez de mains battues pour le justifier. En v2, l'ordre est **mécanique**, pas un rappel méthodologique à appliquer soi-même :
+Jamais l'inverse — un seuil de rentabilité calculé avant d'avoir vérifié que la range adverse contient encore assez de mains battues ne veut rien dire.
 
 1. `pc narrow --hand hand.json --action <action_observée>` reconstruit la range adverse après filtrage par ce qu'elle a réellement misé/payé.
-2. `pc equity` compare le héros à cette range narrowée, jamais à la range de départ non filtrée.
-3. `pc brief` fait les deux dans cet ordre avant de rendre son verdict — le raisonnement biaisé n'est plus possible parce que le seuil n'est calculé qu'après le narrowing, par construction.
+2. `pc equity` compare le héros à cette range narrowée, jamais à la range de départ.
+3. `pc brief` enchaîne les deux dans cet ordre avant de rendre son verdict.
 
-**Piège cognitif que ça neutralise, mais qu'il faut savoir nommer si l'utilisateur raisonne à voix haute sans passer par le moteur** : un seuil de rentabilité bas ("il suffit de 17%") est structurellement plus séduisant à énoncer quand on est déjà engagé dans le coup — une forme de *sunk cost* déguisée en calcul froid.
+Dans la sortie de `pc narrow`, `retained_pct` est une part de **poids**, pas un compte de combos : un combo dont le budget ne finance pas l'action est retenu au poids plancher, pas supprimé — d'où un `remaining_combos` qui peut rester égal à `original_combos` pendant que `retained_pct` chute. Le champ `note` de la sortie le rappelle à chaque appel ; c'est `retained_pct` qui porte le filtrage.
+
+**Piège cognitif à nommer si l'utilisateur raisonne à voix haute sans passer par le moteur** : un seuil de rentabilité bas (« il suffit de 17% ») est d'autant plus séduisant à énoncer qu'on est déjà engagé dans le coup — du *sunk cost* déguisé en calcul froid.
 
 ## Principe
 
-Le moteur (`pc brief`) répond à "qui gagne le plus souvent, et le budget ATT/DEF autorise-t-il encore l'action". Une vraie décision de poker dépend aussi de facteurs qualitatifs que le moteur ne modélise pas complètement. Ces 5 facteurs s'appliquent en plus du verdict du moteur, jamais à sa place, et seulement en G5 (zone grise) — sur G0-G4, le moteur a déjà tranché.
+Le moteur (`pc brief`) répond à « qui gagne le plus souvent, et le budget ATT/DEF autorise-t-il encore l'action ». Une vraie décision de poker dépend aussi de facteurs qualitatifs qu'il ne modélise pas complètement. Ces 5 facteurs s'appliquent **en plus** du verdict du moteur, après l'avoir fait calculer, et seulement en G5 (zone grise) — sur G0-G4, le moteur a déjà tranché.
+
+S'ils conduisent à s'écarter du verdict, l'écart doit être dit explicitement, chiffre du moteur à l'appui, avec le facteur qui le motive (voir `live-session`, « Dévier du moteur : permis, jamais en silence »). Jamais une conclusion qui contredit le moteur sans le dire, ni un de ces facteurs invoqué avant d'avoir le verdict.
 
 ## 1. Position (IP / OOP)
 
@@ -41,6 +45,6 @@ Déjà branché sur le budget : `pc budget --villain-archetype fish` applique la
 
 ## Comment l'utiliser
 
-**Constat de v1 à ne pas répéter** : "à consulter systématiquement" n'a pas suffi tant que ce n'était qu'une convention de skill. En v2 le problème disparaît structurellement — le gate G5 de `pc brief` CHARGE cette skill, ce n'est plus une ressource "disponible si besoin". Si `pc brief` renvoie un gate G0-G4, ces 5 facteurs ne sont pas nécessaires à la réponse (le moteur les a déjà pris en compte via le budget/multiway) ; seul G5 justifie de les dérouler.
+Le gate G5 de `pc brief` CHARGE cette skill : ce n'est pas une ressource « disponible si besoin ». Sur un gate G0-G4, ces 5 facteurs ne sont pas nécessaires (le moteur les a déjà pris en compte via le budget et l'ajustement multiway) ; seul G5 justifie de les dérouler.
 
 Ne pas transformer chaque analyse en liste exhaustive des 5 points — les mentionner seulement quand ils changent réellement la conclusion.

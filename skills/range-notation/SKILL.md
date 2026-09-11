@@ -18,8 +18,8 @@ description: Notation standard des ranges en no-limit hold'em (syntaxe type Equi
 | `ATs+` | ATs, AJs, AQs, AKs |
 | `ATo+` | Idem en offsuit |
 | `JTs-98s` | Tous les connecteurs suited entre 98s et JTs inclus |
-| `AsKd` (ou `A♠K♦`) | **Une main exacte à deux cartes** — levée en v2 de la limitation v1 |
-| `QQ@50%` | **Pondération explicite** — nouveau en v2, sur n'importe quel token (`77-99@30%`, `AJs+@60%`) |
+| `AsKd` (ou `A♠K♦`) | **Une main exacte à deux cartes** |
+| `QQ@50%` | **Pondération explicite**, sur n'importe quel token (`77-99@30%`, `AJs+@60%`) |
 
 Séparateur entre tokens : la virgule. Espaces ignorés.
 

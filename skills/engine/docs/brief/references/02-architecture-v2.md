@@ -353,7 +353,7 @@ adverses) et compte les tokens. Un chiffre avant/après, pas une impression.
 Ces éléments sont des décisions produit déjà prises et validées en session. Ils sont
 dans `current-plugin/` :
 
-- Rendu ASCII de la table avec rectangle à largeur invariante, unité `𝄫`, identités à
+- Rendu ASCII de la table avec rectangle à largeur invariante, unité `bb`, identités à
   l'extérieur, actions à l'intérieur, récapitulatif de transition entre rues.
 - Persistance des archétypes sur les sièges physiques pour toute la session.
 - Bust du héros = fin de session, pas de rechargement silencieux.

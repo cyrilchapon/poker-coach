@@ -5,9 +5,9 @@ description: Construit avec l'utilisateur une range concrète (open-raise, 3bet,
 
 # Range Builder
 
-## v2 : lookup paramétré, plus une table par position/format
+## Point de départ : le lookup paramétré du moteur
 
-Le point de départ n'est plus `references/baseline-ranges.md` seul : `pc brief --hand hand.json` en préflop renvoie un champ `range` avec le pourcentage/la notation de référence pour la situation exacte (scénario, `n_behind`, `ip_postflop`, profondeur), et un `confidence` (`high` / `medium` / `extrapolated`). **Toujours dire la confidence à l'utilisateur** — HU et 6-max sont `high`, 7/8-max s'appuie sur une extrapolation explicite (`extrapolated`), pas des charts vérifiés. Voir `docs/brief/references/03-multiway-generalization.md` pour le raisonnement complet (chemin absolu via `scripts/pc paths`, clé `docs_dir`) ; `references/baseline-ranges.md` (v1) reste la référence de notation 6-max d'origine si un recoupement est utile.
+`pc brief --hand hand.json` en préflop renvoie un champ `range` avec le pourcentage/la notation de référence pour la situation exacte (scénario, `n_behind`, `ip_postflop`, profondeur), et un `confidence` (`high` / `medium` / `extrapolated`). **Toujours dire la confidence à l'utilisateur** — HU et 6-max sont `high`, 7/8-max s'appuie sur une extrapolation explicite (`extrapolated`), pas des charts vérifiés. Voir `docs/brief/references/03-multiway-generalization.md` pour le raisonnement complet (chemin absolu via `scripts/pc paths`, clé `docs_dir`) ; `references/baseline-ranges.md` reste une référence 6-max à recouper si besoin.
 
 Scénarios dérivés (pas des tables séparées, des transformations depuis la RFI — `pokercoach/ranges/table.py`) : `vs_rfi`, `vs_limp` (élargi, traité en scénario exploitant de première classe, pas dégénéré), `squeeze`, `vs_3bet`, `vs_4bet`. Toujours `confidence: extrapolated` — ce sont des formules d'approximation documentées, pas des sorties de solveur. `pc brief` les câble automatiquement dès que le héros défend (préflop hors ouverture) ; pour un lookup direct indépendant d'une main de héros donnée, `pc ranges --hand hand.json --scenario {rfi,vs_rfi,vs_limp,squeeze,vs_3bet,vs_4bet} [--seat N] [--opener-seat N]`.
 
@@ -17,8 +17,8 @@ Scénarios dérivés (pas des tables séparées, des transformations depuis la R
 - `pc glossary` : vocabulaire (linéaire/polarisée/condensée, blockers, 3bet, squeeze...).
 - `pc equity` : pour vérifier l'équité moyenne de la range construite contre une range adverse de référence, à titre de sanity check.
 - `decision-factors` : facteurs qualitatifs à croiser, en G5 seulement (`pc brief` charge cette skill lui-même le cas échéant).
-- `references/baseline-ranges.md` : ranges 6-max v1, gardées pour la convention de notation d'origine.
-- `scripts/range_stats.py`, `scripts/hand_rank.py` (v1, conservés) : % de mains/combos d'une range, et classement de mains candidates par équité contre une range adverse — utiles pour situer une main proche d'une frontière (voir ci-dessous). Ce ne sont pas des solveurs : classement par équité brute seule.
+- `references/baseline-ranges.md` : ranges 6-max de référence, à recouper au besoin.
+- `scripts/range_stats.py`, `scripts/hand_rank.py` : % de mains/combos d'une range, et classement de mains candidates par équité contre une range adverse — utiles pour situer une main proche d'une frontière (voir ci-dessous). Ce ne sont pas des solveurs : classement par équité brute seule.
 
 ## Situer une main dans une range de call (cas d'usage fréquent)
 

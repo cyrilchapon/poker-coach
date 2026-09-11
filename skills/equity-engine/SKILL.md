@@ -5,16 +5,16 @@ description: Calcul d'équité main vs range ou range vs range, exécuté via `p
 
 # Equity Engine
 
-## v2 : plus de script à installer, un sous-programme du CLI `pc`
+## Invocation
 
-Le moteur est du Python pur (module `pokercoach`, packagé), pas un script sandbox séparé — pas de `pip install` à refaire à chaque session. Invoqué ici via `scripts/pc` (à la racine de cette skill) : se localise lui-même (voir `engine`), qu'il soit pip-installé (Claude Code) ou non (claude.ai).
+Sous-programme du CLI `pc`, invoqué via `scripts/pc` (à la racine de cette skill) : rien à installer, il se localise lui-même (voir `engine`).
 
 ```bash
 scripts/pc equity --hand hand.json --vs "<range>"                       # cartes exactes du héros vs une range
 scripts/pc equity --range1 "<range1>" --vs "<range2>" --board "..." --dead "..." --iterations 20000
 ```
 
-- `--range1` / `--vs` : notation `range-notation` (ex `"QQ+,AKs"`), y compris une main exacte (`AsKd`) et la pondération `@xx%` — les deux limitations connues de la v1 sont levées.
+- `--range1` / `--vs` : notation `range-notation` (ex `"QQ+,AKs"`), y compris une main exacte (`AsKd`) et la pondération `@xx%`.
 - `--board` / `--dead` : cartes séparées par des virgules (ex `"Ah,7c,2d"`), vides si non pertinent.
 - `--iterations` : Monte-Carlo seulement (voir méthode ci-dessous), 20000 par défaut.
 

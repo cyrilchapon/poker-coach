@@ -609,6 +609,79 @@ all-in could not be run out at all).
   except in the cases `new_hand.py` names as out of its own scope; and a
   "Runout" section covering how a called all-in is dealt out.
 
+## Live-session test report v4: findings and fixes
+
+A fourth real-session test surfaced three engine bugs and one behavioural
+problem with the conversational layer.
+
+- **A pocket pair on a paired board was classified as an `underpair`.**
+  Hero TT on J-9-9-3 came back as `made: "underpair"`, which is wrong twice
+  over: hero holds a genuine two pair (his own tens plus the board's nines),
+  and TT is not "strictly below every board card" — the literal definition
+  of the class — it only trails the jack. `handclass._classify_made` now
+  detects "pocket pair matching no board rank + paired board" and returns
+  `two_pair` with `made_sub.includes_board_pair`.
+
+  The budget could not simply follow. `att-def-budgets.yaml` says in its own
+  `two_pair` notes that a two pair including the board's pair is really worth
+  "top/middle pair" — the table is calibrated for two pairs the opponent does
+  not have, and half of this hand is shared by everyone at the table. So the
+  classification carries a `made_sub.strength_proxy`: the pair-family class
+  that holds the hand's real strength, derived from how many board ranks
+  outrank the pocket pair (`second_pair` / `third_pair` /
+  `fourth_fifth_pair` / `underpair`). `budget.effective_pair_class()` routes
+  the baseline, the texture penalties (paired-board malus included) and the
+  "is this a bluff line?" test through that proxy. Measured on TT / J-9-9-3:
+  att 0 → 1.8, def 0.8 → 2.4. A pocket pair *above* the whole board stays
+  `overpair` — standard terminology, and a class with its own calibrated
+  paired-board penalty.
+
+- **`pc narrow`'s `remaining_combos` and `retained_pct` read as
+  contradictory.** `remaining_combos` stayed equal to `original_combos` on
+  check/bet/call/raise while `retained_pct` moved with the action. Neither
+  was wrong; they measure different things. A combo whose ATT/DEF budget
+  can't fund the observed action is *retained at the bluff floor*
+  (the anti-polarisation mechanism), not removed — so the count is flat by
+  design and the weighted percentage is what carries the filtering. That was
+  documented in the module docstring and nowhere in the output. The three
+  populations are now counted separately (`combos_kept_full_weight`,
+  `combos_kept_at_bluff_floor`, `combos_removed`), `retained_pct_basis`
+  names the unit, `filters_combos` flags the two actions that don't filter
+  at all (fold/check), and a `note` says which number carries the reading.
+
+- **ASCII table alignment drifted line by line.** `_c`/`_l`/`_r` padded with
+  `len()`, which counts code points, not display columns. The worst offender
+  was the stack unit itself: `𝄫` (U+1D12B, outside the basic multilingual
+  plane) is absent from most monospace fonts, so clients fell back to a
+  substitute face of arbitrary advance width — and since it only appears on
+  lines carrying an amount, the resulting drift was *not uniform*, which is
+  the worst case for a column drawing. The unit is now plain ASCII `bb`, and
+  every pad/truncate goes through `display_width()` (0 columns for combining
+  marks and variation selectors, 2 for East Asian Wide/Fullwidth, never a
+  cut mid-character). The `♠♥♦♣` symbols stay — they are the card display
+  convention — with their width set by `AMBIGUOUS_WIDTH` (1, correct for any
+  Western monospace font; a terminal that renders them double-width also
+  distorts the box borders, which aren't padded, so that is a documented
+  limit rather than a supported mode).
+
+- **The conversational layer drifted from the engine without saying so.** In
+  session it justified a preflop recommendation with a two pair the hero
+  only made on the flop — arguing from a hand strength that did not exist at
+  decision time, against an engine verdict that was right. `live-session`
+  (and, in short form, `hand-review`) now open on the posture rather than on
+  tooling: the agent is the expert, `pc` is its solver. Five rules — consult
+  the tools before speaking, date every claim by its street, deviate from the
+  engine only after having it compute, with a named contextual reason and
+  said out loud, use the gate (G0→G5) as the depth dial, and steer the calls
+  (re-ask at a finer precision level) instead of concluding on an unverified
+  intuition.
+
+- **Skills carried version archaeology.** Several `SKILL.md` files opened on
+  "in v1 this was…, in v2 it became…" sections, and retold past bug fixes as
+  narrative. The client agent has no v1 to compare against — that material is
+  project history, which belongs here in the README, not in an instruction
+  file. All of it was rewritten as direct, present-tense rules.
+
 ## Repo layout
 
 ```
